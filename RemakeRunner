@@ -1,0 +1,14 @@
+
+
+clean:
+	rm pager
+
+build:
+	gcc src/main.c -o pager
+
+run: clean build
+	./pager test.txt 2> dbg.txt
+
+memtest: clean build
+	valgrind --leak-check=full -s ./pager --spawn "ls /"
+
