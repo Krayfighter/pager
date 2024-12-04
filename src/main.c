@@ -11,58 +11,11 @@
 #include "sys/ioctl.h"
 // #include "math.h"
 
+#include "typedef_macros.h"
 
-// #define range(ItemT, ItemName, start, end) \
-// ItemT ItemName = start;
 
 #define for_range(ItemT, ItemName, start, end) \
 for (ItemT ItemName = start; ItemName < end; ItemName += 1)
-
-#define define_heap_array_struct(ItemT) \
-typedef struct { \
-  ItemT *item_buffer; \
-  size_t buffer_size; \
-  size_t buffer_len; \
-} Vec_ ## ItemT;
-
-#define define_heap_array_push(ItemT) \
-void Vec_ ## ItemT ## _push(Vec_ ## ItemT *self, ItemT item) { \
-  if (self->buffer_len == self->buffer_size) { \
-    self->buffer_size *= 2; \
-    self->item_buffer = (ItemT *)realloc(self->item_buffer, sizeof(ItemT) * self->buffer_size); \
-  } \
-  self->item_buffer[self->buffer_len] = item; \
-  self->buffer_len++; \
-}
-
-#define define_heap_array_new(ItemT) \
-Vec_ ## ItemT Vec_ ## ItemT ## _new(size_t start_items) { \
-  return (Vec_ ## ItemT) { \
-    .item_buffer = malloc(sizeof(ItemT) * start_items), \
-    .buffer_size = start_items, \
-    .buffer_len = 0, \
-  }; \
-}
-
-#define define_heap_array_foreach(ItemT) \
-void Vec_ ## ItemT ## _foreach(Vec_ ## ItemT *self, void (*fpointer)(ItemT *)) { \
-  for(size_t i = 0; i < self->buffer_len; i++) { \
-    fpointer(&self->item_buffer[i]); \
-  } \
-}
-#define define_heap_array_free(ItemT) \
-void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self) { \
-  free(self->item_buffer); \
-  self->buffer_size = 0; \
-  self->buffer_len = 0xffffffff; \
-}
-
-#define define_heap_array(ItemT) \
-define_heap_array_struct(ItemT); \
-define_heap_array_push(ItemT) \
-define_heap_array_new(ItemT) \
-define_heap_array_foreach(ItemT) \
-define_heap_array_free(ItemT)
 
 typedef struct { char *internal; } CharString;
 void CharString_free(CharString *self) {
@@ -73,6 +26,14 @@ define_heap_array(CharString);
 
 #define ANSI_ESCAPE = 0x1b;
 const char *ANSI_ERASE_UNTIL_END = "\x1b[0J";
+
+// NOTE these are NOT ANSI, but are defined by the xterm specification
+// see https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Functions-using-CSI-_-ordered-by-the-final-character_s_
+const char *MAKE_CURSOR_INVISIBLE_SEQUENCE = "\x1b[?25l";
+const char *MAKE_CURSOR_VISIBLE_SEQUENCE = "\x1b[?25h";
+// see https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h2-The-Alternate-Screen-Buffer
+const char *ENTER_ALTERNATE_SCREEN = "\x1b[?1049h";
+const char *LEAVE_ALTERNATE_SCREEN = "\x1b[?1049l";
 
 
 
@@ -88,14 +49,12 @@ void Window_render(Window *self, FILE *output_stream) {
   ioctl(fileno(stdout), TIOCGWINSZ, &terminal_window_size);
 
   // Still a little buggy for very large line counts, but functional
-  for_range(size_t, i, self->window_start, self->window_start + terminal_window_size.ws_row) {
+    fprintf(output_stream, "%lu: %s%s", self->window_start, ANSI_ERASE_UNTIL_END, self->lines.item_buffer[self->window_start].internal);
+  for_range(size_t, i, self->window_start + 1, self->window_start + terminal_window_size.ws_row) {
     if (i == self->lines.buffer_len) { break; }
     fprintf(output_stream, "\n\r%lu: %s%s", i, ANSI_ERASE_UNTIL_END, self->lines.item_buffer[i].internal);
   }
 
-  fprintf(output_stream, "\x08");
-
-  // fprintf(output_stream, "\r%s", ANSI_ERASE_UNTIL_END);
   fflush(output_stream);
 }
 
@@ -104,11 +63,15 @@ struct termios original_terminal_state;
 void save_terminal() {
   if (isatty(fileno(stdout))) {
     tcgetattr(fileno(stdout), &original_terminal_state);
+    // fprintf(stdout, "%s", SAVE_SCREEN);
+    fprintf(stdout, "%s", ENTER_ALTERNATE_SCREEN);
   }else { fprintf(stderr, "WARN: stdout is not a tty\n"); }
 }
 void restore_terminal() {
   if (isatty(fileno(stdout))) {
     tcsetattr(fileno(stdout), TCSANOW, &original_terminal_state);
+    // fprintf(stdout, "%s%s", RESTORE_SCREEN, MAKE_CURSOR_VISIBLE_SEQUENCE);
+    fprintf(stdout, "%s%s", LEAVE_ALTERNATE_SCREEN, MAKE_CURSOR_VISIBLE_SEQUENCE);
   }else { fprintf(stderr, "WARN: stdout is not a tty\n"); }
 }
 void tc_enable_terminal_raw_mode() {
@@ -121,6 +84,7 @@ void tc_enable_terminal_raw_mode() {
     if (tcsetattr(fileno(stdout), TCSAFLUSH, &cfg)) {
       fprintf(stderr, "WARN: unable to set raw mode for terminal");
     }
+    fprintf(stdout, "%s", MAKE_CURSOR_INVISIBLE_SEQUENCE);
   }else { fprintf(stderr, "WARN: stdout is not a tty"); }
 }
 
@@ -133,7 +97,7 @@ int main(int32_t argc, char **argv) {
   atexit(restore_terminal);
 
   FILE *input_stream = NULL;
-  system("test");
+  // system("test");
   if (argc == 0) { input_stream = stdin; }
   else {
     for (size_t i = 1; i < argc; i++) {
