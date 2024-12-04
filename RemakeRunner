@@ -9,6 +9,9 @@ build:
 run: clean build
 	./pager test.txt 2> dbg.txt
 
+big_test: clean build
+	./pager --spawn "cd ../.. && ls -R"
+
 memtest: clean build
-	valgrind --leak-check=full -s ./pager --spawn "ls /"
+	valgrind --leak-check=full -s ./pager --spawn "cd ../.. && ls -R"
 

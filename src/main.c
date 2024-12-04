@@ -7,9 +7,16 @@
 #include "errno.h"
 #include "string.h"
 #include "termios.h"
-#include <unistd.h>
+#include "unistd.h"
+#include "sys/ioctl.h"
 // #include "math.h"
 
+
+// #define range(ItemT, ItemName, start, end) \
+// ItemT ItemName = start;
+
+#define for_range(ItemT, ItemName, start, end) \
+for (ItemT ItemName = start; ItemName < end; ItemName += 1)
 
 #define define_heap_array_struct(ItemT) \
 typedef struct { \
@@ -77,10 +84,18 @@ typedef struct {
 void Window_render(Window *self, FILE *output_stream) {
   if (self->window_start >= self->lines.buffer_len) { return; }
   fprintf(output_stream, "\x1b[H"); // move cursor to 0,0
-  for (size_t i = self->window_start; i < self->lines.buffer_len; i++) {
-    fprintf(output_stream, "\r%s%s", ANSI_ERASE_UNTIL_END, self->lines.item_buffer[i].internal);
+  struct winsize terminal_window_size;
+  ioctl(fileno(stdout), TIOCGWINSZ, &terminal_window_size);
+
+  // Still a little buggy for very large line counts, but functional
+  for_range(size_t, i, self->window_start, self->window_start + terminal_window_size.ws_row) {
+    if (i == self->lines.buffer_len) { break; }
+    fprintf(output_stream, "\n\r%lu: %s%s", i, ANSI_ERASE_UNTIL_END, self->lines.item_buffer[i].internal);
   }
-  fprintf(output_stream, "\r%s", ANSI_ERASE_UNTIL_END);
+
+  fprintf(output_stream, "\x08");
+
+  // fprintf(output_stream, "\r%s", ANSI_ERASE_UNTIL_END);
   fflush(output_stream);
 }
 
@@ -153,13 +168,14 @@ int main(int32_t argc, char **argv) {
     return -1;
   }
 
-  Vec_CharString string_vec = Vec_CharString_new(5);
+  Vec_CharString string_vec = Vec_CharString_new(8);
 
-  char *line_buffer = malloc(100);
-  while (fgets(line_buffer, 100, input_stream)) {
+  char *line_buffer = malloc(1000);
+  while (fgets(line_buffer, 1000, input_stream)) {
     size_t buffer_len = strlen(line_buffer);
     char *new_buffer = malloc(buffer_len);
     memcpy(new_buffer, line_buffer, buffer_len);
+    new_buffer[buffer_len-1] = '\0';
 
     Vec_CharString_push(&string_vec, (CharString){new_buffer} );
   }
