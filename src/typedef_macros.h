@@ -40,12 +40,30 @@ void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self) { \
   self->buffer_len = 0xffffffff; \
 }
 
+// like (Rust -> Vec) (C++ -> std::vector)
 #define define_heap_array(ItemT) \
 define_heap_array_struct(ItemT); \
 define_heap_array_push(ItemT) \
 define_heap_array_new(ItemT) \
 define_heap_array_foreach(ItemT) \
 define_heap_array_free(ItemT)
+
+
+#define define_option_union(BaseType, NoneType) \
+typedef union { \
+  BaseType some; \
+  NoneType none; \
+} Option_ ## BaseType;
+
+#define define_option_evaluation(BaseType, none_value_binary) \
+bool Option_ ## BaseType ## _is_some(Option_ ## BaseType *self) { \
+  return !(self->none == none_value_binary); \
+}
+
+// like (Rust -> Option) (C++ -> std::optional)
+#define define_option(BaseType, NoneType, none_value_binary) \
+define_option_union(BaseType, NoneType); \
+define_option_evaluation(BaseType, none_value_binary);
 
 #endif
 
