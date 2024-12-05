@@ -1,0 +1,34 @@
+
+===============================
+Pager Help Menu
+===============================
+
+_______________________________
+Invocations
+
+Paging over a file
+$ pager <filename>
+
+Paging a subprocess
+$ pager --spawn "<command string>"
+or
+$ pager --spawn <command>
+for a command with no spaces
+
+
+_______________________________
+Navigation
+
+navigation aims to be vim-like (however, not modal)
+k -> up
+j -> down
+q -> quit
+
+-- Warning may not work universally --
+PgUp -> up <tty row count> units
+PgDown -> down <tty row count> units
+
+
+
+
+
