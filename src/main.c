@@ -35,8 +35,26 @@ const char *MAKE_CURSOR_VISIBLE_SEQUENCE = "\x1b[?25h";
 const char *ENTER_ALTERNATE_SCREEN = "\x1b[?1049h";
 const char *LEAVE_ALTERNATE_SCREEN = "\x1b[?1049l";
 
+void move_cursor_to_col(FILE *stream, size_t col_num) {
+  fprintf(stream, "\x1b[%luG", col_num);
+}
 
 
+size_t base_10_digits(size_t number) {
+  if (number < 9) { return 1; }
+  else if (number < 99) { return 2; }
+  else if (number < 999) { return 3; }
+  else if (number < 9999) { return 4; }
+  else if (number < 99999) { return 5; }
+  else if (number < 999999) { return 6; }
+  else if (number < 9999999) { return 7; }
+  else if (number < 99999999) { return 8; }
+  else if (number < 999999999) { return 9; }
+  else {
+    fprintf(stderr, "WARN: the number of lines is extremely high, and line numbers may not be display correctly\n");
+    return 10;
+  }
+}
 typedef struct {
   Vec_CharString lines;
   size_t window_start;
@@ -47,12 +65,16 @@ void Window_render(Window *self, FILE *output_stream) {
   fprintf(output_stream, "\x1b[H"); // move cursor to 0,0
   struct winsize terminal_window_size;
   ioctl(fileno(stdout), TIOCGWINSZ, &terminal_window_size);
+  size_t line_number_max_digits = base_10_digits(self->lines.buffer_len);
 
-  // Still a little buggy for very large line counts, but functional
-    fprintf(output_stream, "%lu: %s%s", self->window_start, ANSI_ERASE_UNTIL_END, self->lines.item_buffer[self->window_start].internal);
-  for_range(size_t, i, self->window_start + 1, self->window_start + terminal_window_size.ws_row) {
+  for_range(size_t, i, self->window_start, self->window_start + terminal_window_size.ws_row) {
     if (i == self->lines.buffer_len) { break; }
-    fprintf(output_stream, "\n\r%lu: %s%s", i, ANSI_ERASE_UNTIL_END, self->lines.item_buffer[i].internal);
+    if (i == self->window_start) { // do not push first line down
+      fprintf(output_stream, "%lu", i);
+    }else { fprintf(output_stream, "\n\r%lu", i); }
+
+    move_cursor_to_col(output_stream, line_number_max_digits + 1);
+    fprintf(output_stream, ": %s%s", ANSI_ERASE_UNTIL_END, self->lines.item_buffer[i].internal);
   }
 
   fflush(output_stream);
@@ -89,6 +111,58 @@ void tc_enable_terminal_raw_mode() {
 }
 
 
+enum TokenType {
+  TOKEN_HELP,
+  TOKEN_SPAWN,
+  TOKEN_STRING,
+};
+
+typedef struct {
+  enum TokenType type;
+  void *option_content;
+} Token;
+
+
+
+define_heap_array(Token);
+define_option(Vec_Token, uint64_t, 0x0);
+
+// NOTE this function does NOT take ownership of the array passed
+// as it assumes that it is handled by the OS (as in argv passed to main)
+Option_Vec_Token parse_command_line_args(char **args, size_t arg_count) {
+  Vec_Token tokens = Vec_Token_new(arg_count);
+
+  // skip the first arg which is always the executable's filename
+  for_range(size_t, arg_index, 1, arg_count) {
+    size_t arg_length = strlen(args[arg_index]);
+    if (arg_length == 0) { continue; }
+    else if (args[arg_index][0] == '-') {
+      if (!strcmp(args[arg_index], "--spawn")) {
+        Vec_Token_push(&tokens, (Token){ .type = TOKEN_SPAWN, .option_content = NULL });
+        continue;
+      }
+      else if (!strcmp(args[arg_index], "--help")) {
+        Vec_Token_push(&tokens, (Token) { .type = TOKEN_HELP, .option_content = NULL });
+        continue;
+      }
+      else {
+        fprintf(stderr, "Error: unrecognized option %s\n", args[arg_index]);
+        Vec_Token_free(&tokens);
+        return (Option_Vec_Token){ .none = 0x0 };
+      }
+    }
+    else {
+      Vec_Token_push(&tokens, (Token){ .type = TOKEN_STRING, .option_content = args[arg_index] });
+      continue;
+    }
+  }
+
+  return (Option_Vec_Token){ .some = tokens };
+}
+
+
+
+
 int main(int32_t argc, char **argv) {
   int return_value = 0;
 
@@ -96,39 +170,69 @@ int main(int32_t argc, char **argv) {
   save_terminal();
   atexit(restore_terminal);
 
+  Option_Vec_Token maybe_tokens = parse_command_line_args(argv, argc);
+  if (!Option_Vec_Token_is_some(&maybe_tokens)) {
+    fprintf(stderr, "Error: Failed to parse command line args (see previous)\n");
+    return -1;
+  }
+  Vec_Token tokens = maybe_tokens.some;
+  if (tokens.buffer_len == 0) {
+    fprintf(stderr, "Error: missing required argument\n");
+    return -1;
+  }
+
   FILE *input_stream = NULL;
-  // system("test");
-  if (argc == 0) { input_stream = stdin; }
-  else {
-    for (size_t i = 1; i < argc; i++) {
-      if (!strcmp(argv[i], "--spawn")) {
-        if (argc == i) {
-          fprintf(stderr, "Error: --spawn requires a shell command to execute");
-          return -1;
-        }
-        i++;
-        if (argc >= i + 2) {
-          fprintf(stderr, "TODO: argument concatenation is not yet implemented");
-          return -1;
-        }
-        char *command_string = argv[i];
-        input_stream = popen(command_string, "r");
-        break;
-      }else {
-        if (i+1 > argc) {
-          fprintf(stderr, "Error: too many args after file name\n");
-          return -1;
-        }
-        input_stream = fopen(argv[i], "r");
-        if (!input_stream) {
-          fprintf(stderr, "Error: failed to open file \"%s\", %s\n", argv[i], strerror(errno));
-          return -1;
-        }
+  for_range(size_t, index, 0, tokens.buffer_len) {
+    if (tokens.item_buffer[index].type == TOKEN_HELP) {
+      input_stream = fopen("help.txt", "r");
+      if (input_stream == NULL) {
+        fprintf(stderr, "Error: Failed to open help.txt -> %s\n", strerror(errno));
+        return -1;
       }
+      break;
     }
   }
   if (!input_stream) {
-    fprintf(stderr, "Error: arg parser did not set input\n");
+    // for_range(size_t, token_index, 0, tokens.buffer_len) {
+    if (tokens.item_buffer[0].type == TOKEN_SPAWN) {
+      if (tokens.buffer_len < 2) {
+        fprintf(stderr, "Error: expected a command after --spawn\n");
+        return -1;
+      }else if (tokens.buffer_len > 2) {
+        fprintf(stderr, "Error: too many arguments after --spawn\n");
+        return -1;
+      }else if (tokens.item_buffer[1].type != TOKEN_STRING) {
+        fprintf(stderr, "Error: expected command string, got unexpected argument type\n");
+        return -1;
+      }
+      char *command_str = tokens.item_buffer[1].option_content;
+      input_stream = popen(command_str, "r");
+      if (!input_stream) {
+        fprintf(stderr, "Error: failed to spawn subprocess -> %s\n", strerror(errno));
+        return -1;
+      }
+    }
+    else if (tokens.item_buffer[0].type == TOKEN_STRING) {
+      if (tokens.buffer_len > 1) {
+        fprintf(stderr, "Error: unexpected arguments after filename\n");
+        return -1;
+      }else if (tokens.item_buffer[0].type != TOKEN_STRING) {
+        fprintf(stderr, "Error: expected filename string, received unexpected argument type\n");
+        return -1;
+      }
+      char *filename = tokens.item_buffer[0].option_content;
+      input_stream = fopen(filename, "r");
+      if (!input_stream) {
+        fprintf(stderr, "Error: Failed to open file -> %s\n", strerror(errno));
+        return -1;
+      }
+    }
+    // }
+  }
+  Vec_Token_free(&tokens);
+
+  if (!input_stream) {
+    fprintf(stderr, "!LogicError!: input_stream should never be NULL after argument parser\n");
     return -1;
   }
 
@@ -152,19 +256,47 @@ int main(int32_t argc, char **argv) {
 
   tc_enable_terminal_raw_mode();
   Window_render(&view_window, stdout);
-  char chr;
+  // char chr;
+
+  // NOTE this is stored on the stack, and so the bytes
+  // in the buffer are reversed
+  typedef union {
+    char buffer[4];
+    uint64_t integer;
+  } IBuffer;
+
+  IBuffer input_buffer;
   // Mainloop
   while (1) {
-    if (read(fileno(stdin), &chr, 1)) {
-      if (chr == 'k' && view_window.window_start > 0) {
+    size_t read_size = read(fileno(stdin), input_buffer.buffer, 4);
+    if (read_size != 0) {
+      if (input_buffer.buffer[0] == 'k' && view_window.window_start > 0) {
         view_window.window_start -= 1;
       } else if (
-        chr == 'j' && view_window.window_start + 1 < view_window.lines.buffer_len
+        input_buffer.buffer[0] == 'j' && view_window.window_start + 1 < view_window.lines.buffer_len
       ) {
         view_window.window_start += 1;
-      }else if (chr == 'q') {
+      }else if (input_buffer.buffer[0] == 'q') {
         break;
+      // NOTE notice that the 0x1b byte is at the end. this byte is the ESCAPE
+      // code in ASCII which actually comes first because the bytes in input_buffer
+      // are stored in reverse order since they are on the stack
+      }else if (input_buffer.integer == 0x7e365b1b) {
+        struct winsize tty_dims;
+        ioctl(fileno(stdout), TIOCGWINSZ, &tty_dims);
+        view_window.window_start += tty_dims.ws_row;
+        if (view_window.window_start >= view_window.lines.buffer_len) {
+          view_window.window_start = view_window.lines.buffer_len - 1;
+        }
+      }else if (input_buffer.integer == 0x7e355b1b) {
+        struct winsize tty_dims;
+        ioctl(fileno(stdout), TIOCGWINSZ, &tty_dims);
+        if (view_window.window_start > tty_dims.ws_row) {
+          view_window.window_start -= tty_dims.ws_row;
+        }else { view_window.window_start = 0; }
       }
+      // fprintf(stderr, "DBG: char hex %lx\n", input_buffer.integer);
+      input_buffer.integer = 0x0;
     }
 
     Window_render(&view_window, stdout);
