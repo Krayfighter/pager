@@ -40,13 +40,27 @@ void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self) { \
   self->buffer_len = 0xffffffff; \
 }
 
+#define define_heap_array_uninit(ItemT) \
+const Vec_ ## ItemT Vec_ ## ItemT ## _UNINIT = (Vec_ ## ItemT) { \
+  .item_buffer = NULL, \
+  .buffer_size = 0, \
+  .buffer_len = 0, \
+};
+
+#define define_heap_array_is_uninit(ItemT) \
+bool Vec_ ## ItemT ## _is_uninit(Vec_ ## ItemT *self) { \
+  return self->item_buffer == NULL; \
+}
+
 // like (Rust -> Vec) (C++ -> std::vector)
 #define define_heap_array(ItemT) \
 define_heap_array_struct(ItemT); \
 define_heap_array_push(ItemT) \
 define_heap_array_new(ItemT) \
 define_heap_array_foreach(ItemT) \
-define_heap_array_free(ItemT)
+define_heap_array_free(ItemT) \
+define_heap_array_uninit(ItemT) \
+define_heap_array_is_uninit(ItemT)
 
 
 #define define_option_union(BaseType, NoneType) \
@@ -60,10 +74,14 @@ bool Option_ ## BaseType ## _is_some(Option_ ## BaseType *self) { \
   return !(self->none == none_value_binary); \
 }
 
+#define define_option_none(BaseType, none_value_binary) \
+const Option_ ## BaseType Option_ ## BaseType ## _None = (Option_ ## BaseType){ .none = none_value_binary }
+
 // like (Rust -> Option) (C++ -> std::optional)
 #define define_option(BaseType, NoneType, none_value_binary) \
 define_option_union(BaseType, NoneType); \
-define_option_evaluation(BaseType, none_value_binary);
+define_option_evaluation(BaseType, none_value_binary); \
+define_option_none(BaseType, none_value_binary);
 
 #endif
 

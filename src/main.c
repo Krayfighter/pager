@@ -9,9 +9,12 @@
 #include "termios.h"
 #include "unistd.h"
 #include "sys/ioctl.h"
+#include "sys/socket.h"
+#include "sys/wait.h"
 // #include "math.h"
 
 #include "typedef_macros.h"
+#include <asm-generic/ioctls.h>
 
 
 #define for_range(ItemT, ItemName, start, end) \
@@ -26,6 +29,7 @@ define_heap_array(CharString);
 
 #define ANSI_ESCAPE = 0x1b;
 const char *ANSI_ERASE_UNTIL_END = "\x1b[0J";
+const char *ANSI_ERASE_LINE = "\x1b[2K";
 
 // NOTE these are NOT ANSI, but are defined by the xterm specification
 // see https://invisible-island.net/xterm/ctlseqs/ctlseqs.html#h3-Functions-using-CSI-_-ordered-by-the-final-character_s_
@@ -60,24 +64,56 @@ typedef struct {
   size_t window_start;
 } Window;
 
-void Window_render(Window *self, FILE *output_stream) {
+void Window_render(Window *self, FILE *output_stream, size_t rows, size_t cols) {
   if (self->window_start >= self->lines.buffer_len) { return; }
-  fprintf(output_stream, "\x1b[H"); // move cursor to 0,0
-  struct winsize terminal_window_size;
-  ioctl(fileno(stdout), TIOCGWINSZ, &terminal_window_size);
+  // fprintf(output_stream, "\x1b[H"); // move cursor to 0,0
+  // struct winsize terminal_window_size;
+  // ioctl(fileno(stdout), TIOCGWINSZ, &terminal_window_size);
   size_t line_number_max_digits = base_10_digits(self->lines.buffer_len);
 
-  for_range(size_t, i, self->window_start, self->window_start + terminal_window_size.ws_row) {
+  // for_range(size_t, i, self->window_start, self->window_start + terminal_window_size.ws_row) {
+  for_range(size_t, i, self->window_start, self->window_start + rows) {
     if (i == self->lines.buffer_len) { break; }
+    fprintf(output_stream, "%s", ANSI_ERASE_UNTIL_END);
     if (i == self->window_start) { // do not push first line down
       fprintf(output_stream, "%lu", i);
     }else { fprintf(output_stream, "\n\r%lu", i); }
 
     move_cursor_to_col(output_stream, line_number_max_digits + 1);
-    fprintf(output_stream, ": %s%s", ANSI_ERASE_UNTIL_END, self->lines.item_buffer[i].internal);
+    fprintf(output_stream, "| %s", self->lines.item_buffer[i].internal);
   }
 
   fflush(output_stream);
+}
+
+// define_option(Window, uint64_t, 0x0);
+typedef struct winsize TTY_Dims;
+
+// a conecetpual screen that consumes the entire tty with
+// one or more Windows dividing it
+typedef struct {
+  Window *top_window;
+  Window *bottom_window;
+} Screen;
+
+void Screen_render(Screen *self, FILE *output_stream) {
+  TTY_Dims tty_dims;
+  ioctl(fileno(output_stream), TIOCGWINSZ, &tty_dims);
+
+  bool split_mode = self->bottom_window != NULL;
+
+  size_t top_window_rows;
+  size_t bottom_window_rows;
+  if (split_mode) {
+    top_window_rows = tty_dims.ws_row / 2;
+    bottom_window_rows = tty_dims.ws_row - top_window_rows;
+  }else { top_window_rows = tty_dims.ws_row; }
+
+  fprintf(output_stream, "\x1b[H"); // move cursor to 0,0
+  Window_render(self->top_window, output_stream, top_window_rows, tty_dims.ws_col);
+  if (split_mode) {
+    Window_render(self->bottom_window, output_stream, bottom_window_rows, tty_dims.ws_col);
+  }
 }
 
 
@@ -164,7 +200,6 @@ Option_Vec_Token parse_command_line_args(char **args, size_t arg_count) {
 
 
 int main(int32_t argc, char **argv) {
-  int return_value = 0;
 
   // save terminal and restore it after main exits
   save_terminal();
@@ -181,18 +216,19 @@ int main(int32_t argc, char **argv) {
     return -1;
   }
 
-  FILE *input_stream = NULL;
+  FILE *main_input_stream = NULL;
+  FILE *secondary_input_stream = NULL;
   for_range(size_t, index, 0, tokens.buffer_len) {
     if (tokens.item_buffer[index].type == TOKEN_HELP) {
-      input_stream = fopen("help.txt", "r");
-      if (input_stream == NULL) {
+      main_input_stream = fopen("help.txt", "r");
+      if (main_input_stream == NULL) {
         fprintf(stderr, "Error: Failed to open help.txt -> %s\n", strerror(errno));
         return -1;
       }
       break;
     }
   }
-  if (!input_stream) {
+  if (!main_input_stream) {
     // for_range(size_t, token_index, 0, tokens.buffer_len) {
     if (tokens.item_buffer[0].type == TOKEN_SPAWN) {
       if (tokens.buffer_len < 2) {
@@ -206,11 +242,69 @@ int main(int32_t argc, char **argv) {
         return -1;
       }
       char *command_str = tokens.item_buffer[1].option_content;
-      input_stream = popen(command_str, "r");
-      if (!input_stream) {
+
+      int subproc_stdin_pair[2];
+      int subproc_stdout_pair[2];
+      int subproc_stderr_pair[2];
+
+      if (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stdin_pair) < 0) {
+        fprintf(stderr, "Error: failed to create local socket -> %s\n", strerror(errno));
+        return -1;
+      }
+      if (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stdout_pair) < 0) {
+        fprintf(stderr, "Error: failed to create local socket -> %s\n", strerror(errno));
+        return -1;
+      }
+      if (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stderr_pair) < 0) {
+        fprintf(stderr, "Error: failed to create local socket -> %s\n", strerror(errno));
+        return -1;
+      }
+
+      pid_t process_id;
+      process_id = fork();
+      if (process_id < 0) {
+        fprintf(stderr, "Error, failed to fork process -> %s\n", strerror(errno));
+        return -1;
+      }else if (process_id == 0) {
+        // replace stdin stdout and stderr file descriptors with the sockets
+        close(subproc_stdin_pair[0]);
+        close(subproc_stdout_pair[0]);
+        close(subproc_stderr_pair[0]);
+
+        dup2(subproc_stdin_pair[1], STDIN_FILENO);
+        dup2(subproc_stdout_pair[1], STDOUT_FILENO);
+        dup2(subproc_stderr_pair[1], STDERR_FILENO);
+
+        stdin = fdopen(subproc_stdin_pair[1], "r");
+        stdout = fdopen(subproc_stdout_pair[1], "w");
+        stderr = fdopen(subproc_stderr_pair[1], "w");
+
+        execl("/bin/sh", "/bin/sh", "-c", command_str, NULL);
+        exit(0);
+      }
+      // the sockets don't work if you don't close the other end
+      close(subproc_stdin_pair[1]);
+      close(subproc_stdout_pair[1]);
+      close(subproc_stderr_pair[1]);
+
+      fprintf(stderr, "DBG: running in main process\n");
+      // FILE *child_stdin = fdopen(subproc_stdin_pair[0], "w");
+      FILE *child_stdout = fdopen(subproc_stdout_pair[0], "r");
+      // FILE *child_stderr = fdopen(subproc_stderr_pair[0], "r");
+
+      main_input_stream = child_stdout;
+      secondary_input_stream = fdopen(subproc_stderr_pair[0], "r");
+      if (!main_input_stream) {
         fprintf(stderr, "Error: failed to spawn subprocess -> %s\n", strerror(errno));
         return -1;
       }
+
+      int return_status;
+      waitpid(process_id, &return_status, 0x0);
+      if (return_status != 0) {
+        fprintf(stderr, "WARN: subprocess returned with non-zero return code (%i)\b", return_status);
+      }
+      
     }
     else if (tokens.item_buffer[0].type == TOKEN_STRING) {
       if (tokens.buffer_len > 1) {
@@ -221,8 +315,8 @@ int main(int32_t argc, char **argv) {
         return -1;
       }
       char *filename = tokens.item_buffer[0].option_content;
-      input_stream = fopen(filename, "r");
-      if (!input_stream) {
+      main_input_stream = fopen(filename, "r");
+      if (!main_input_stream) {
         fprintf(stderr, "Error: Failed to open file -> %s\n", strerror(errno));
         return -1;
       }
@@ -231,32 +325,62 @@ int main(int32_t argc, char **argv) {
   }
   Vec_Token_free(&tokens);
 
-  if (!input_stream) {
+  if (!main_input_stream) {
     fprintf(stderr, "!LogicError!: input_stream should never be NULL after argument parser\n");
     return -1;
   }
 
-  Vec_CharString string_vec = Vec_CharString_new(8);
+  Vec_CharString main_window_strings = Vec_CharString_new(8);
+  Vec_CharString second_window_strings = Vec_CharString_UNINIT;
+
+  if (secondary_input_stream != NULL) {
+    second_window_strings = Vec_CharString_new(8);
+  }
 
   char *line_buffer = malloc(1000);
-  while (fgets(line_buffer, 1000, input_stream)) {
+  while (fgets(line_buffer, 1000, main_input_stream)) {
     size_t buffer_len = strlen(line_buffer);
     char *new_buffer = malloc(buffer_len);
     memcpy(new_buffer, line_buffer, buffer_len);
     new_buffer[buffer_len-1] = '\0';
 
-    Vec_CharString_push(&string_vec, (CharString){new_buffer} );
+    Vec_CharString_push(&main_window_strings, (CharString){new_buffer} );
+  }
+  if (secondary_input_stream != NULL) {
+    while (fgets(line_buffer, 1000, secondary_input_stream)) {
+      size_t buffer_len = strlen(line_buffer);
+      char *new_buffer = malloc(buffer_len);
+      memcpy(new_buffer, line_buffer, buffer_len);
+      new_buffer[buffer_len-1] = '\0';
+
+      Vec_CharString_push(&second_window_strings, (CharString){new_buffer} );
+    }
+    if (second_window_strings.item_buffer[0].internal == NULL) {
+      Vec_CharString_push(&second_window_strings, (CharString){ malloc(0) });
+    }
   }
   free(line_buffer);
-  fclose(input_stream);
+  fclose(main_input_stream);
 
-  Window view_window;
-  view_window.lines = string_vec;
-  view_window.window_start = 0;
+  fprintf(stderr, "DBG: read lines from subprocess\n");
+
+  Window window;
+  window.lines = main_window_strings;
+  window.window_start = 0;
+
+  Window second_window;
+
+  Screen screen = (Screen){ .top_window = &window, .bottom_window = NULL };
+
+  if (second_window_strings.item_buffer != NULL && second_window_strings.buffer_len != 1) {
+    second_window.lines = second_window_strings;
+    second_window.window_start = 0;
+    screen.bottom_window = &second_window;
+  }
 
   tc_enable_terminal_raw_mode();
-  Window_render(&view_window, stdout);
-  // char chr;
+  // Window_render(&view_window, stdout);
+  Screen_render(&screen, stdout);
 
   // NOTE this is stored on the stack, and so the bytes
   // in the buffer are reversed
@@ -270,12 +394,14 @@ int main(int32_t argc, char **argv) {
   while (1) {
     size_t read_size = read(fileno(stdin), input_buffer.buffer, 4);
     if (read_size != 0) {
-      if (input_buffer.buffer[0] == 'k' && view_window.window_start > 0) {
-        view_window.window_start -= 1;
+      if (input_buffer.buffer[0] == 'k' && screen.top_window->window_start > 0) {
+        // view_window.window_start -= 1;
+        screen.top_window->window_start -= 1;
       } else if (
-        input_buffer.buffer[0] == 'j' && view_window.window_start + 1 < view_window.lines.buffer_len
+        input_buffer.buffer[0] == 'j' && screen.top_window->window_start + 1 < window.lines.buffer_len
       ) {
-        view_window.window_start += 1;
+        // view_window.window_start += 1;
+        screen.top_window->window_start += 1;
       }else if (input_buffer.buffer[0] == 'q') {
         break;
       // NOTE notice that the 0x1b byte is at the end. this byte is the ESCAPE
@@ -284,22 +410,23 @@ int main(int32_t argc, char **argv) {
       }else if (input_buffer.integer == 0x7e365b1b) {
         struct winsize tty_dims;
         ioctl(fileno(stdout), TIOCGWINSZ, &tty_dims);
-        view_window.window_start += tty_dims.ws_row;
-        if (view_window.window_start >= view_window.lines.buffer_len) {
-          view_window.window_start = view_window.lines.buffer_len - 1;
+        window.window_start += tty_dims.ws_row;
+        if (window.window_start >= window.lines.buffer_len) {
+          window.window_start = window.lines.buffer_len - 1;
         }
       }else if (input_buffer.integer == 0x7e355b1b) {
         struct winsize tty_dims;
         ioctl(fileno(stdout), TIOCGWINSZ, &tty_dims);
-        if (view_window.window_start > tty_dims.ws_row) {
-          view_window.window_start -= tty_dims.ws_row;
-        }else { view_window.window_start = 0; }
+        if (window.window_start > tty_dims.ws_row) {
+          window.window_start -= tty_dims.ws_row;
+        }else { window.window_start = 0; }
       }
       // fprintf(stderr, "DBG: char hex %lx\n", input_buffer.integer);
       input_buffer.integer = 0x0;
     }
 
-    Window_render(&view_window, stdout);
+    // Window_render(&view_window, stdout);
+    Screen_render(&screen, stdout);
 
     const uint32_t MILLISECOND = 1000;
     const uint32_t SECOND = 1000 * MILLISECOND;
@@ -308,8 +435,13 @@ int main(int32_t argc, char **argv) {
   }
 
   // free strings
-  Vec_CharString_foreach(&string_vec, CharString_free);
-  Vec_CharString_free(&string_vec);
+  Vec_CharString_foreach(&main_window_strings, CharString_free);
+  Vec_CharString_free(&main_window_strings);
+
+  if (second_window_strings.item_buffer != NULL) {
+    Vec_CharString_foreach(&second_window_strings, CharString_free);
+    Vec_CharString_free(&second_window_strings);
+  }
 
 }
 
