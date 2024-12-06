@@ -4,10 +4,10 @@ clean:
 	rm pager
 
 build:
-	gcc src/main.c -o pager
+	gcc -g src/main.c -o pager
 
 run: clean build
-	./pager test.txt 2> dbg.txt
+	./pager --spawn ls > dbg.txt
 
 big_test: clean build
 	./pager --spawn "cd ../.. && ls -R"
