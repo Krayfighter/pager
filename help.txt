@@ -9,6 +9,9 @@ Invocations
 Paging over a file
 $ pager <filename>
 
+Paging over two files
+$ pager <file1> <file2>
+
 Paging a subprocess
 $ pager --spawn "<command string>"
 or
@@ -24,7 +27,10 @@ k -> up
 j -> down
 q -> quit
 
--- Warning may not work universally --
+h -> next window
+l -> prev window
+
+-- Warning may not work universally (also currently broken) --
 PgUp -> up <tty row count> units
 PgDown -> down <tty row count> units
 
