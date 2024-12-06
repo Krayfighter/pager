@@ -1,12 +1,16 @@
 
 #ifndef TYPEDEF_MACROS_H
 #define TYPEDEF_MACROS_H
-#define define_heap_array_struct(ItemT) \
+
+#define declare_heap_array_struct(ItemT) \
 typedef struct { \
   ItemT *item_buffer; \
   size_t buffer_size; \
   size_t buffer_len; \
 } Vec_ ## ItemT;
+
+#define declare_heap_array_push(ItemT) \
+void Vec_ ## ItemT ## _push(Vec_ ## ItemT *self, ItemT item)
 
 #define define_heap_array_push(ItemT) \
 void Vec_ ## ItemT ## _push(Vec_ ## ItemT *self, ItemT item) { \
@@ -18,6 +22,9 @@ void Vec_ ## ItemT ## _push(Vec_ ## ItemT *self, ItemT item) { \
   self->buffer_len++; \
 }
 
+#define declare_heap_array_new(ItemT) \
+Vec_ ## ItemT Vec_ ## ItemT ## _new(size_t start_items)
+
 #define define_heap_array_new(ItemT) \
 Vec_ ## ItemT Vec_ ## ItemT ## _new(size_t start_items) { \
   return (Vec_ ## ItemT) { \
@@ -27,18 +34,28 @@ Vec_ ## ItemT Vec_ ## ItemT ## _new(size_t start_items) { \
   }; \
 }
 
+#define declare_heap_array_foreach(ItemT) \
+void Vec_ ## ItemT ## _foreach(Vec_ ## ItemT *self, void (*fpointer)(ItemT *))
+
 #define define_heap_array_foreach(ItemT) \
 void Vec_ ## ItemT ## _foreach(Vec_ ## ItemT *self, void (*fpointer)(ItemT *)) { \
   for(size_t i = 0; i < self->buffer_len; i++) { \
     fpointer(&self->item_buffer[i]); \
   } \
 }
+
+#define declare_heap_array_free(ItemT) \
+void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self)
+
 #define define_heap_array_free(ItemT) \
 void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self) { \
   free(self->item_buffer); \
   self->buffer_size = 0; \
   self->buffer_len = 0xffffffff; \
 }
+
+// #define declare_heap_array_uninit(ItemT) \
+// const Vec_ ## ItemT Vec_ ## ItemT ## _UNINIT = (Vec_ ## ItemT)
 
 #define define_heap_array_uninit(ItemT) \
 const Vec_ ## ItemT Vec_ ## ItemT ## _UNINIT = (Vec_ ## ItemT) { \
@@ -47,14 +64,24 @@ const Vec_ ## ItemT Vec_ ## ItemT ## _UNINIT = (Vec_ ## ItemT) { \
   .buffer_len = 0, \
 };
 
+#define declare_heap_array_is_uninit(ItemT) \
+bool Vec_ ## ItemT ## _is_uninit(Vec_ ## ItemT *self)
+
 #define define_heap_array_is_uninit(ItemT) \
 bool Vec_ ## ItemT ## _is_uninit(Vec_ ## ItemT *self) { \
   return self->item_buffer == NULL; \
 }
 
+#define declare_heap_array(ItemT) \
+declare_heap_array_struct(ItemT); \
+declare_heap_array_push(ItemT); \
+declare_heap_array_new(ItemT); \
+declare_heap_array_foreach(ItemT); \
+declare_heap_array_free(ItemT); \
+declare_heap_array_is_uninit(ItemT);
+
 // like (Rust -> Vec) (C++ -> std::vector)
 #define define_heap_array(ItemT) \
-define_heap_array_struct(ItemT); \
 define_heap_array_push(ItemT) \
 define_heap_array_new(ItemT) \
 define_heap_array_foreach(ItemT) \
