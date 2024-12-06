@@ -6,16 +6,11 @@
 #include "stdbool.h"
 #include "errno.h"
 #include "string.h"
-// #include "termios.h"
 #include "unistd.h"
-// #include "sys/ioctl.h"
 #include "sys/socket.h"
-#include "sys/wait.h"
 #include "sys/fcntl.h"
-// #include "math.h"
 
 #include "typedef_macros.h"
-// #include <asm-generic/ioctls.h>
 
 #include "interface.h"
 #include <fcntl.h>
@@ -164,23 +159,13 @@ int main(int32_t argc, char **argv) {
       close(subproc_stdout_pair[1]);
       close(subproc_stderr_pair[1]);
 
-      // FILE *child_stdin = fdopen(subproc_stdin_pair[0], "w");
-      FILE *child_stdout = fdopen(subproc_stdout_pair[0], "r");
-      // FILE *child_stderr = fdopen(subproc_stderr_pair[0], "r");
 
-      main_input_stream = child_stdout;
+      main_input_stream = fdopen(subproc_stdout_pair[0], "r");
       secondary_input_stream = fdopen(subproc_stderr_pair[0], "r");
       if (!main_input_stream) {
         fprintf(stderr, "Error: failed to spawn subprocess -> %s\n", strerror(errno));
         return -1;
       }
-
-      // int return_status;
-      // waitpid(process_id, &return_status, 0x0);
-      // if (return_status != 0) {
-      //   fprintf(stderr, "WARN: subprocess returned with non-zero return code (%i)\n", return_status);
-      // }
-      
     }
     else if (tokens.item_buffer[0].type == TOKEN_STRING) {
       bool splitscreen_view = false;
@@ -228,23 +213,13 @@ int main(int32_t argc, char **argv) {
     screen.bottom_window = &second_window;
   }
 
-  FILE *dbg = fopen("/home/aiden/code/pager/dbg.txt", "w");
-  fprintf(dbg, "before loop\n");
-  fflush(dbg);
-
   enter_raw_mode();
   Screen_render(&screen, stdout);
 
   while (1) {
-
-    fprintf(dbg, "ONE\n");
-    fflush(dbg);
-
     if (Screen_read_stdin(&screen) == INTERFACE_RESULT_QUIT) {
       break;
     }
-    fprintf(dbg, "TWO\n");
-    fflush(dbg);
 
     Screen_render(&screen, stdout);
 
@@ -258,7 +233,8 @@ int main(int32_t argc, char **argv) {
   if (screen.bottom_window) {
     Window_free(screen.bottom_window);
   }
-
+  if (main_input_stream != NULL) { fclose(main_input_stream); }
+  if (secondary_input_stream != NULL) { fclose(secondary_input_stream); }
 
 }
 
