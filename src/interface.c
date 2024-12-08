@@ -89,29 +89,50 @@ size_t base_10_digits(size_t number) {
   }
 }
 
-Window Window_new(FILE *source) {
+define_heap_array(Window);
+
+Window Window_new(int source) {
   return (Window) {
     .lines = Vec_CharString_new(8),
     .window_start = 0,
-    .source = source
+    .source_fd = source
   };
 }
 
 void Window_update(Window *self) {
-  char buffer[1024];
+  static char buffer[1024];
+  static size_t buffer_index = 0;
+  char nanobuffer;
 
-  while (fgets(buffer, 1024, self->source)) {
-    size_t buffer_len = strlen(buffer);
-    char *new_buffer = malloc(buffer_len);
-    memcpy(new_buffer, buffer, buffer_len);
-    new_buffer[buffer_len-1] = '\0';
+  // int source_fileno = fileno(self->source_fd);
+  while(read(self->source_fd, &nanobuffer, 1) > 0) {
+    if (nanobuffer == '\n') {
+      size_t buffer_len = buffer_index + 1;
+      char *string_buf = malloc(buffer_len);
+      memcpy(string_buf, buffer, buffer_len);
+      string_buf[buffer_len-1] = '\0';
+      Vec_CharString_push(&self->lines, (CharString){ .internal = string_buf });
 
-    Vec_CharString_push(&self->lines, (CharString){new_buffer} );
+      buffer_index = 0;
+      continue;
+    }
+    buffer[buffer_index] = nanobuffer;
+    buffer_index += 1;
   }
+
+  // while (fgets(buffer, 1024, self->source)) {
+  //   size_t buffer_len = strlen(buffer);
+  //   char *new_buffer = malloc(buffer_len);
+  //   memcpy(new_buffer, buffer, buffer_len);
+  //   new_buffer[buffer_len-1] = '\0';
+
+  //   Vec_CharString_push(&self->lines, (CharString){new_buffer} );
+  // }
 }
 
-void Window_render(Window *self, FILE *output_stream, size_t rows, size_t cols, bool focused) {
+void Window_render(Window *self, size_t rows, size_t cols, bool focused) {
   if (self->window_start >= self->lines.buffer_len) { return; }
+  // FILE *output_stream = fdopen(output_fd, "w");
   // fprintf(output_stream, "\x1b[H"); // move cursor to 0,0
   // struct winsize terminal_window_size;
   // ioctl(fileno(stdout), TIOCGWINSZ, &terminal_window_size);
@@ -128,14 +149,14 @@ void Window_render(Window *self, FILE *output_stream, size_t rows, size_t cols, 
     if (i == self->lines.buffer_len) { break; }
     // fprintf(output_stream, "%s", ANSI_ERASE_UNTIL_END);
     if (i == self->window_start) { // do not push first line down
-      fprintf(output_stream, "%lu", i);
-    }else { fprintf(output_stream, "\n\r%lu", i); }
+      fprintf(stdout, "%lu", i);
+    }else { fprintf(stdout, "\n\r%lu", i); }
 
-    move_cursor_to_col(output_stream, line_number_max_digits + 1);
-    fprintf(output_stream, "%s|\x1b[0m %s", COLOR, self->lines.item_buffer[i].internal);
+    move_cursor_to_col(stdout, line_number_max_digits + 1);
+    fprintf(stdout, "%s|\x1b[0m %s", COLOR, self->lines.item_buffer[i].internal);
   }
 
-  fflush(output_stream);
+  // fflush(output_stream);
 }
 
 void Window_move_up(Window *self, size_t count) {
@@ -178,11 +199,11 @@ typedef struct winsize TTY_Dims;
 
 InterfaceResult Screen_read_stdin(Screen *self) {
   Window *focused_window;
-  if (self->top_window != NULL && self->focus == 0) {
-    focused_window = self->top_window;
+  if (self->frame1 != NULL && self->focus == 0) {
+    focused_window = self->frame1;
   }
-  else if (self->bottom_window != NULL && self->focus == 1) {
-    focused_window = self->bottom_window;
+  else if (self->frame2!= NULL && self->focus == 1) {
+    focused_window = self->frame2;
   }
   else {
     fprintf(stderr, "WARN: Screen focus does not refer to a valid window\n");
@@ -190,18 +211,18 @@ InterfaceResult Screen_read_stdin(Screen *self) {
   }
   WindowControl code = Window_handle_input(focused_window);
   if (code == WINDOW_QUIT) { return INTERFACE_RESULT_QUIT; }
-  if (code == WINDOW_SWITCH_NEXT || code == WINDOW_SWITCH_PREV) {
-    if (self->focus == 0) { self->focus = 1; }
-    else { self->focus = 0; }
-  }
+  // if (code == WINDOW_SWITCH_NEXT || code == WINDOW_SWITCH_PREV) {
+  //   if (self->focus == 0) { self->focus = 1; }
+  //   else { self->focus = 0; }
+  // }
   return INTERFACE_RESULT_NONE;
 }
 
-void Screen_render(Screen *self, FILE *output_stream) {
+void Screen_render(Screen *self) {
   TTY_Dims tty_dims;
-  ioctl(fileno(output_stream), TIOCGWINSZ, &tty_dims);
+  ioctl(STDOUT_FILENO, TIOCGWINSZ, &tty_dims);
 
-  bool split_mode = self->bottom_window != NULL;
+  bool split_mode = self->frame2 != NULL;
 
   size_t top_window_rows;
   size_t bottom_window_rows;
@@ -210,21 +231,27 @@ void Screen_render(Screen *self, FILE *output_stream) {
     bottom_window_rows = tty_dims.ws_row - (top_window_rows + 1);
   }else { top_window_rows = tty_dims.ws_row; }
   
-  fprintf(output_stream, "%s%s", ANSI_MOVE_CURSOR_TO_ORIGIN, ANSI_ERASE_SCREEN);
+  // write(output_fd, ANSI_MOVE_CURSOR_TO_ORIGIN, strlen(ANSI_MOVE_CURSOR_TO_ORIGIN));
+  // write(output_fd, ANSI_ERASE_SCREEN, strlen(ANSI_ERASE_SCREEN));
 
-  if (self->top_window != NULL) { Window_update(self->top_window); }
-  if (self->bottom_window != NULL) { Window_update(self->bottom_window); }
+  if (self->frame1 != NULL) { Window_update(self->frame1); }
+  if (self->frame2 != NULL) { Window_update(self->frame2 ); }
 
+
+  // FILE *output_stream = fdopen(output_fd, "w");
+
+  fprintf(stdout, "%s%s", ANSI_MOVE_CURSOR_TO_ORIGIN, ANSI_ERASE_SCREEN);
   
-  Window_render(self->top_window, output_stream, top_window_rows, tty_dims.ws_col, self->focus == 0);
+  Window_render(self->frame1, top_window_rows, tty_dims.ws_col, self->focus == 0);
   if (split_mode) {
-    move_cursor_to_position(output_stream, top_window_rows+1, 0);
-    for_range(size_t, i, 0, tty_dims.ws_col) { fprintf(output_stream, "="); }
+    move_cursor_to_position(stdout, top_window_rows+1, 0);
+    for_range(size_t, i, 0, tty_dims.ws_col) { fprintf(stdout, "="); }
 
-    move_cursor_to_position(output_stream, top_window_rows+2, 0);
-    Window_render(self->bottom_window, output_stream, bottom_window_rows, tty_dims.ws_col, self->focus == 1);
+    move_cursor_to_position(stdout, top_window_rows+2, 0);
+    Window_render(self->frame2, bottom_window_rows, tty_dims.ws_col, self->focus == 1);
   }
-  fflush(output_stream);
+  // fflush(output_stream);
+  // fsync(output_fd);
 
 }
 

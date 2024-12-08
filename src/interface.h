@@ -25,8 +25,10 @@ typedef struct {
   Vec_CharString lines;
   size_t window_start;
   size_t window_height;
-  FILE *source;
+  int source_fd;
 } Window;
+
+declare_heap_array(Window);
 
 
 typedef enum {
@@ -45,9 +47,9 @@ typedef union {
   uint64_t integer;
 } KeyboardCode;
 
-Window Window_new(FILE *source);
+Window Window_new(int source_fd);
 void Window_update(Window *self);
-void Window_render(Window *self, FILE *output_stream, size_t rows, size_t cols, bool focused);
+void Window_render(Window *self, size_t rows, size_t cols, bool focused);
 void Window_move_up(Window *self, size_t count);
 void Window_move_down(Window *self, size_t count);
 WindowControl Window_handle_input(Window *self);
@@ -56,8 +58,9 @@ void Window_free(Window *self);
 // a conecetpual screen that consumes the entire tty with
 // one or more Windows dividing it
 typedef struct {
-  Window *top_window;
-  Window *bottom_window;
+  Vec_Window windows;
+  Window *frame1;
+  Window *frame2;
   size_t focus;
 } Screen;
 
@@ -67,7 +70,7 @@ typedef enum {
 } InterfaceResult;
 
 InterfaceResult Screen_read_stdin(Screen *self);
-void Screen_render(Screen *self, FILE *output_stream);
+void Screen_render(Screen *self);
 
 
 
