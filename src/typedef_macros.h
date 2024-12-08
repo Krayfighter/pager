@@ -72,13 +72,23 @@ bool Vec_ ## ItemT ## _is_uninit(Vec_ ## ItemT *self) { \
   return self->item_buffer == NULL; \
 }
 
+#define declare_heap_array_get(ItemT) \
+ItemT *Vec_ ## ItemT ## _get(Vec_ ## ItemT *self, size_t index);
+
+#define define_heap_array_get(ItemT) \
+ItemT *Vec_ ## ItemT ## _get(Vec_ ## ItemT *self, size_t index) { \
+  if (index >= self->buffer_len) { return NULL; } \
+  return &self->item_buffer[index]; \
+}
+
 #define declare_heap_array(ItemT) \
 declare_heap_array_struct(ItemT); \
 declare_heap_array_push(ItemT); \
 declare_heap_array_new(ItemT); \
 declare_heap_array_foreach(ItemT); \
 declare_heap_array_free(ItemT); \
-declare_heap_array_is_uninit(ItemT);
+declare_heap_array_is_uninit(ItemT); \
+declare_heap_array_get(ItemT);
 
 // like (Rust -> Vec) (C++ -> std::vector)
 #define define_heap_array(ItemT) \
@@ -87,7 +97,14 @@ define_heap_array_new(ItemT) \
 define_heap_array_foreach(ItemT) \
 define_heap_array_free(ItemT) \
 define_heap_array_uninit(ItemT) \
-define_heap_array_is_uninit(ItemT)
+define_heap_array_is_uninit(ItemT) \
+define_heap_array_get(ItemT)
+
+#define foreach(ItemT, item_name, array, array_len, block) \
+for (size_t index = 0; index < array_len; index += 1) { \
+  ItemT *item_name = &array[index]; \
+  block \
+}
 
 
 #define define_option_union(BaseType, NoneType) \
