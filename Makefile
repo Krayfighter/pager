@@ -6,4 +6,7 @@ run: pager
 pager: src/main.c src/interface.c
 	$(CC) -g src/interface.c src/main.c -o pager
 
+debug: pager
+	valgrind -s --track-origins=yes --leak-check=full --show-leak-kinds=all ./pager bigtest.txt test.txt
+
 
