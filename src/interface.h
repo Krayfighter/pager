@@ -21,7 +21,7 @@ typedef struct { char *internal; } CharString;
 void CharString_free(CharString *self);
 
 
-declare_heap_array(CharString);
+declare_heap_array(CharString)
 
 typedef struct {
   Vec_CharString lines;
@@ -34,14 +34,14 @@ typedef struct {
   char *next_line;
 } Window;
 
-declare_heap_array(Window);
+declare_heap_array(Window)
 
 
 typedef enum {
   WINDOW_MOVE_UP = 'k',
-  WINDOW_PAGE_UP = 0x7e365b1b,
+  WINDOW_PAGE_UP = 0x7e355b1b,
   WINDOW_MOVE_DOWN = 'j',
-  WINDOW_PAGE_DOWN = 0x7e355b1b,
+  WINDOW_PAGE_DOWN = 0x7e365b1b,
   WINDOW_QUIT = 'q',
   WINDOW_SWITCH_NEXT = 'h',
   WINDOW_SWITCH_PREV = 'l',

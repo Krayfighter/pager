@@ -71,7 +71,7 @@ void enter_raw_mode() {
 void CharString_free(CharString *self) {
   free(self->internal);
 }
-define_heap_array(CharString);
+define_heap_array(CharString)
 
 
 
@@ -91,7 +91,7 @@ size_t base_10_digits(size_t number) {
   }
 }
 
-define_heap_array(Window);
+define_heap_array(Window)
 
 
 void *Window_read_blocking(void *args) {

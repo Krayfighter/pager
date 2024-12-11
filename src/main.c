@@ -29,13 +29,13 @@ typedef struct {
   void *option_content;
 } Token;
 
-declare_heap_array(Token);
-define_heap_array(Token);
-define_option(Vec_Token, uint64_t, 0x0);
+declare_heap_array(Token)
+define_heap_array(Token)
+// define_option(Vec_Token, uint64_t, 0x0)
 
 // NOTE this function does NOT take ownership of the array passed
 // as it assumes that it is handled by the OS (as in argv passed to main)
-Option_Vec_Token lex_command_line_args(char **args, size_t arg_count) {
+Vec_Token lex_command_line_args(char **args, size_t arg_count) {
   Vec_Token tokens = Vec_Token_new(arg_count);
 
   // skip the first arg which is always the executable's filename
@@ -54,7 +54,8 @@ Option_Vec_Token lex_command_line_args(char **args, size_t arg_count) {
       else {
         fprintf(stderr, "Error: unrecognized option %s\n", args[arg_index]);
         Vec_Token_free(&tokens);
-        return (Option_Vec_Token){ .none = 0x0 };
+        // return (Option_Vec_Token){ .none = 0x0 };
+        return Vec_Token_UNINIT;
       }
     }
     else {
@@ -63,7 +64,8 @@ Option_Vec_Token lex_command_line_args(char **args, size_t arg_count) {
     }
   }
 
-  return (Option_Vec_Token){ .some = tokens };
+  // return (Option_Vec_Token){ .some = tokens };
+  return tokens;
 }
 
 struct socket_fds {
@@ -113,6 +115,7 @@ struct socket_fds spawn_shell_command(char *command) {
     execl("/bin/sh", "/bin/sh", "-c", command, NULL);
     exit(0);
   }
+  fprintf(stderr, "DBG: Main process id %i, child id %i\n", getpid(), process_id);
   // the sockets don't work if you don't close the other end
   close(subproc_stdin_pair[1]);
   close(subproc_stdout_pair[1]);
@@ -128,11 +131,11 @@ struct socket_fds spawn_shell_command(char *command) {
   return structure;
 }
 
-declare_heap_array(int);
-define_heap_array(int);
+declare_heap_array(int)
+define_heap_array(int)
 
-declare_heap_array(pid_t);
-define_heap_array(pid_t);
+declare_heap_array(pid_t)
+define_heap_array(pid_t)
 
 typedef struct {
   Vec_int file_descriptors;
@@ -203,12 +206,12 @@ int main(int32_t argc, char **argv) {
   save_terminal();
   atexit(restore_terminal);
 
-  Option_Vec_Token maybe_tokens = lex_command_line_args(argv, argc);
-  if (!Option_Vec_Token_is_some(&maybe_tokens)) {
+  Vec_Token tokens = lex_command_line_args(argv, argc);
+  if (tokens.item_buffer == NULL) {
     fprintf(stderr, "Error: Failed to parse command line args (see previous)\n");
     return -1;
   }
-  Vec_Token tokens = maybe_tokens.some;
+  // Vec_Token tokens = maybe_tokens.some;
   if (tokens.buffer_len == 0) {
     fprintf(stderr, "Error: missing required argument\n");
     return -1;
@@ -319,13 +322,15 @@ int main(int32_t argc, char **argv) {
   Vec_int_free(&appstate.file_descriptors);
 
   if (appstate.children.buffer_len != 0) {
+    fprintf(stderr, "DBG: number of children -> %lu\n", appstate.children.buffer_len);
 
     foreach(
       pid_t, child_id,
       appstate.children.item_buffer,
-      appstate.file_descriptors.buffer_len,
+      appstate.children.buffer_len,
       {
-        kill(*child_id, SIGTERM);
+        fprintf(stderr, "DBG: killing child process id %i\n", *child_id);
+        kill(*child_id, SIGQUIT);
       }
     )
 
@@ -334,7 +339,7 @@ int main(int32_t argc, char **argv) {
       foreach(
         pid_t, child_id,
         appstate.children.item_buffer,
-        appstate.file_descriptors.buffer_len,
+        appstate.children.buffer_len,
         {
           if (*child_id == 0) {
             int return_status;

@@ -10,7 +10,7 @@ typedef struct { \
 } Vec_ ## ItemT;
 
 #define declare_heap_array_push(ItemT) \
-void Vec_ ## ItemT ## _push(Vec_ ## ItemT *self, ItemT item)
+void Vec_ ## ItemT ## _push(Vec_ ## ItemT *self, ItemT item);
 
 #define define_heap_array_push(ItemT) \
 void Vec_ ## ItemT ## _push(Vec_ ## ItemT *self, ItemT item) { \
@@ -23,7 +23,7 @@ void Vec_ ## ItemT ## _push(Vec_ ## ItemT *self, ItemT item) { \
 }
 
 #define declare_heap_array_new(ItemT) \
-Vec_ ## ItemT Vec_ ## ItemT ## _new(size_t start_items)
+Vec_ ## ItemT Vec_ ## ItemT ## _new(size_t start_items);
 
 #define define_heap_array_new(ItemT) \
 Vec_ ## ItemT Vec_ ## ItemT ## _new(size_t start_items) { \
@@ -35,7 +35,7 @@ Vec_ ## ItemT Vec_ ## ItemT ## _new(size_t start_items) { \
 }
 
 #define declare_heap_array_foreach(ItemT) \
-void Vec_ ## ItemT ## _foreach(Vec_ ## ItemT *self, void (*fpointer)(ItemT *))
+void Vec_ ## ItemT ## _foreach(Vec_ ## ItemT *self, void (*fpointer)(ItemT *));
 
 #define define_heap_array_foreach(ItemT) \
 void Vec_ ## ItemT ## _foreach(Vec_ ## ItemT *self, void (*fpointer)(ItemT *)) { \
@@ -45,7 +45,7 @@ void Vec_ ## ItemT ## _foreach(Vec_ ## ItemT *self, void (*fpointer)(ItemT *)) {
 }
 
 #define declare_heap_array_free(ItemT) \
-void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self)
+void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self);
 
 #define define_heap_array_free(ItemT) \
 void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self) { \
@@ -54,18 +54,15 @@ void Vec_ ## ItemT ## _free(Vec_ ## ItemT *self) { \
   self->buffer_len = 0xffffffff; \
 }
 
-// #define declare_heap_array_uninit(ItemT) \
-// const Vec_ ## ItemT Vec_ ## ItemT ## _UNINIT = (Vec_ ## ItemT)
-
 #define define_heap_array_uninit(ItemT) \
-const Vec_ ## ItemT Vec_ ## ItemT ## _UNINIT = (Vec_ ## ItemT) { \
+const Vec_ ## ItemT Vec_ ## ItemT ## _UNINIT = { \
   .item_buffer = NULL, \
   .buffer_size = 0, \
   .buffer_len = 0, \
 };
 
 #define declare_heap_array_is_uninit(ItemT) \
-bool Vec_ ## ItemT ## _is_uninit(Vec_ ## ItemT *self)
+bool Vec_ ## ItemT ## _is_uninit(Vec_ ## ItemT *self);
 
 #define define_heap_array_is_uninit(ItemT) \
 bool Vec_ ## ItemT ## _is_uninit(Vec_ ## ItemT *self) { \
@@ -82,13 +79,13 @@ ItemT *Vec_ ## ItemT ## _get(Vec_ ## ItemT *self, size_t index) { \
 }
 
 #define declare_heap_array(ItemT) \
-declare_heap_array_struct(ItemT); \
-declare_heap_array_push(ItemT); \
-declare_heap_array_new(ItemT); \
-declare_heap_array_foreach(ItemT); \
-declare_heap_array_free(ItemT); \
-declare_heap_array_is_uninit(ItemT); \
-declare_heap_array_get(ItemT);
+declare_heap_array_struct(ItemT) \
+declare_heap_array_push(ItemT) \
+declare_heap_array_new(ItemT) \
+declare_heap_array_foreach(ItemT) \
+declare_heap_array_free(ItemT) \
+declare_heap_array_is_uninit(ItemT) \
+declare_heap_array_get(ItemT)
 
 // like (Rust -> Vec) (C++ -> std::vector)
 #define define_heap_array(ItemT) \
@@ -119,13 +116,13 @@ bool Option_ ## BaseType ## _is_some(Option_ ## BaseType *self) { \
 }
 
 #define define_option_none(BaseType, none_value_binary) \
-const Option_ ## BaseType Option_ ## BaseType ## _None = (Option_ ## BaseType){ .none = none_value_binary }
+const Option_ ## BaseType Option_ ## BaseType ## _None = (Option_ ## BaseType){ .none = none_value_binary };
 
 // like (Rust -> Option) (C++ -> std::optional)
 #define define_option(BaseType, NoneType, none_value_binary) \
-define_option_union(BaseType, NoneType); \
-define_option_evaluation(BaseType, none_value_binary); \
-define_option_none(BaseType, none_value_binary);
+define_option_union(BaseType, NoneType) \
+define_option_evaluation(BaseType, none_value_binary) \
+define_option_none(BaseType, none_value_binary)
 
 #endif
 
