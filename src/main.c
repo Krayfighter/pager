@@ -9,6 +9,10 @@
 #include "unistd.h"
 #include "sys/socket.h"
 #include "sys/fcntl.h"
+#include <fcntl.h>
+#include "signal.h"
+#include "sys/wait.h"
+
 
 #include "typedef_macros.h"
 #include "interface.h"
@@ -66,6 +70,7 @@ struct socket_fds {
   int stdin;
   int stdout;
   int stderr;
+  pid_t child_id;
 };
 
 struct socket_fds spawn_shell_command(char *command) {
@@ -116,7 +121,8 @@ struct socket_fds spawn_shell_command(char *command) {
   struct socket_fds structure = {
     .stdin = subproc_stdin_pair[0],
     .stdout = subproc_stdout_pair[0],
-    .stderr = subproc_stderr_pair[0]
+    .stderr = subproc_stderr_pair[0],
+    .child_id = process_id
   };
 
   return structure;
@@ -125,13 +131,18 @@ struct socket_fds spawn_shell_command(char *command) {
 declare_heap_array(int);
 define_heap_array(int);
 
+declare_heap_array(pid_t);
+define_heap_array(pid_t);
+
 typedef struct {
   Vec_int file_descriptors;
+  Vec_pid_t children;
 } Invocation;
 
 Invocation parse_command_line_arguments(Vec_Token arg_tokens) {
   Invocation state;
   state.file_descriptors = Vec_int_new(4);
+  state.children = Vec_pid_t_new(4);
 
   for_range(size_t, index, 0, arg_tokens.buffer_len) {
     if (arg_tokens.item_buffer[index].type == TOKEN_HELP) {
@@ -159,6 +170,8 @@ Invocation parse_command_line_arguments(Vec_Token arg_tokens) {
       char *command_str = command_token->option_content;
 
       struct socket_fds child_streams = spawn_shell_command(command_str);
+
+      Vec_pid_t_push(&state.children, child_streams.child_id);
 
       if (child_streams.stdout < 0 || child_streams.stderr < 0) {
         fprintf(stderr, "Error: failed to spawn child shell command -> %s\n", strerror(errno));
@@ -222,6 +235,27 @@ int main(int32_t argc, char **argv) {
       Vec_Window_push(&windows, Window_new(*filedes));
     }
   )
+  foreach(
+    Window, window,
+    windows.item_buffer,
+    windows.buffer_len,
+    {
+      Window_spawn_reader(window);
+    }
+  )
+
+
+  // Preload a number of lines into the windows before rendering the first frame
+  for (size_t i = 0; i < 20; i += 1) {
+    foreach(
+      Window, window,
+      windows.item_buffer,
+      windows.buffer_len,
+      { Window_update(window); }
+    )
+  }
+
+  // TODO implement window selector
 
   Screen screen = (Screen){
     .windows = windows,
@@ -231,21 +265,39 @@ int main(int32_t argc, char **argv) {
   };
 
   enter_raw_mode();
+
   Screen_render(&screen);
 
+  fcntl(STDIN_FILENO, F_SETFL, O_NONBLOCK);
+
+  // MAINLOOP
   while (1) {
-    if (Screen_read_stdin(&screen) == INTERFACE_RESULT_QUIT) {
+    bool needs_redraw = false;
+
+    if (Screen_read_stdin(&screen, &needs_redraw) == INTERFACE_RESULT_QUIT) {
       break;
     }
 
-    Screen_render(&screen);
+    foreach(
+      Window, window,
+      windows.item_buffer,
+      windows.buffer_len,
+      { needs_redraw |= Window_update(window); }
+    )
+
+    if (needs_redraw) {
+      Screen_render(&screen);
+    }
+
 
     const uint32_t MILLISECOND = 1000;
     const uint32_t SECOND = 1000 * MILLISECOND;
-    const uint32_t FRAME_TIME = 60 / SECOND;
+    const uint32_t FRAME_TIME = 10 / SECOND;
     usleep(FRAME_TIME);
   }
 
+
+  // CLEANUP
   foreach(
     Window, window,
     windows.item_buffer,
@@ -265,6 +317,48 @@ int main(int32_t argc, char **argv) {
     }
   )
   Vec_int_free(&appstate.file_descriptors);
+
+  if (appstate.children.buffer_len != 0) {
+
+    foreach(
+      pid_t, child_id,
+      appstate.children.item_buffer,
+      appstate.file_descriptors.buffer_len,
+      {
+        kill(*child_id, SIGTERM);
+      }
+    )
+
+    for (size_t i = 0; i < 100; i += 1) {
+      bool all_children_dead = true;
+      foreach(
+        pid_t, child_id,
+        appstate.children.item_buffer,
+        appstate.file_descriptors.buffer_len,
+        {
+          if (*child_id == 0) {
+            int return_status;
+            if (waitpid(*child_id, &return_status, WNOHANG) == *child_id) {
+              *child_id = 0; // indicate that this child process has died
+            }
+            else { all_children_dead = false; }
+          }
+        }
+      )
+      if (all_children_dead) { return 0; }
+      usleep(10000);
+    }
+
+    foreach(
+      pid_t, child_id,
+      appstate.children.item_buffer,
+      appstate.file_descriptors.buffer_len,
+      {
+        kill(*child_id, SIGKILL);
+      }
+    )
+  }
+  Vec_pid_t_free(&appstate.children);
 
 }
 
