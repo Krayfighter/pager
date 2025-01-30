@@ -21,9 +21,12 @@ but should work on any terminal that implements
 
 ### Building
 
-building and running can be done with my in-house build system
-[remake](https://github.com/Krayfighter/remake)```remake build``` or GNU make with
-the default target ```make pager``` or ```make``` to build and run test
+pager can be built GNU make. ```make pager``` to build pager or ```make``` to build
+and run pager to test it.
+
+<!-- building and running can be done with my in-house build system -->
+<!-- [remake](https://github.com/Krayfighter/remake)```remake build``` or GNU make with -->
+<!-- the default target ```make pager``` or ```make``` to build and run test -->
 
 ### Running
 
