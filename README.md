@@ -21,7 +21,7 @@ but should work on any terminal that implements
 
 ### Building
 
-pager can be built GNU make. ```make pager``` to build pager or ```make``` to build
+pager can be built with GNU make. ```make pager``` to build pager or ```make``` to build
 and run pager to test it.
 
 <!-- building and running can be done with my in-house build system -->
