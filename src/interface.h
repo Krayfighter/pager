@@ -1,10 +1,10 @@
 
-#include "unistd.h"
 #include "stdio.h"
-#include "typedef_macros.h"
-#include "pthread.h"
+#include "stdbool.h"
 #include <aio.h>
 #include <stdint.h>
+
+#include "plustypes.h"
 
 
 void move_cursor_to_col(FILE *stream, size_t col);
@@ -17,24 +17,22 @@ void enter_raw_mode();
 #define for_range(ItemT, ItemName, start, end) \
 for (ItemT ItemName = start; ItemName < end; ItemName += 1)
 
-typedef struct { char *internal; } CharString;
-void CharString_free(CharString *self);
+typedef char * CharString;
 
-
-declare_heap_array(CharString)
+declare_List(CharString)
 
 typedef struct {
-  Vec_CharString lines;
+  List_CharString lines;
   size_t window_start;
-  int source_fd;
   pthread_t reader_thread;
+  int source_fd;
+  char *next_line;
 
   // communication to reader thread
   _Atomic bool next_line_is_ready;
-  char *next_line;
 } Window;
 
-declare_heap_array(Window)
+declare_List(Window)
 
 
 typedef enum {
@@ -57,7 +55,7 @@ Window Window_new(int source_fd);
 void Window_spawn_reader(Window *self);
 // returns whether the window has been updated
 bool Window_update(Window *self);
-void Window_render(Window *self, size_t rows, size_t cols, bool focused);
+void Window_render(Window *self, uint16_t offset_x, uint16_t offset_y, uint16_t width, uint16_t height, bool focused);
 void Window_move_up(Window *self, size_t count);
 void Window_move_down(Window *self, size_t count);
 WindowControl Window_handle_input(Window *self, size_t tty_rows, bool *needs_redraw);
@@ -71,14 +69,12 @@ typedef enum {
 // a conecetpual screen that consumes the entire tty with
 // one or more Windows dividing it
 typedef struct {
-  Vec_Window windows;
-  Window *frame1;
-  Window *frame2;
-  size_t focus;
+  List_Window windows;
+  uint8_t top_window;
+  uint8_t focus;
 } Screen;
 
 InterfaceCommand Screen_read_stdin(Screen *self, bool *needs_redraw);
-// void *Screen_block_stdin(void *args);
 void Screen_spawn_stdin_reader(Screen *self);
 void Screen_render(Screen *self);
 

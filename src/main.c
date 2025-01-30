@@ -13,9 +13,9 @@
 #include "signal.h"
 #include "sys/wait.h"
 
-
-#include "typedef_macros.h"
 #include "interface.h"
+
+#include "plustypes.h"
 
 
 enum TokenType {
@@ -29,14 +29,13 @@ typedef struct {
   void *option_content;
 } Token;
 
-declare_heap_array(Token)
-define_heap_array(Token)
-// define_option(Vec_Token, uint64_t, 0x0)
+declare_List(Token)
+define_List(Token)
 
 // NOTE this function does NOT take ownership of the array passed
 // as it assumes that it is handled by the OS (as in argv passed to main)
-Vec_Token lex_command_line_args(char **args, size_t arg_count) {
-  Vec_Token tokens = Vec_Token_new(arg_count);
+List_Token lex_command_line_args(char **args, size_t arg_count) {
+  List_Token tokens = List_Token_new(arg_count);
 
   // skip the first arg which is always the executable's filename
   for_range(size_t, arg_index, 1, arg_count) {
@@ -44,27 +43,26 @@ Vec_Token lex_command_line_args(char **args, size_t arg_count) {
     if (arg_length == 0) { continue; }
     else if (args[arg_index][0] == '-') {
       if (!strcmp(args[arg_index], "--spawn")) {
-        Vec_Token_push(&tokens, (Token){ .type = TOKEN_SPAWN, .option_content = NULL });
+        List_Token_push(&tokens, (Token){ .type = TOKEN_SPAWN, .option_content = NULL });
         continue;
       }
       else if (!strcmp(args[arg_index], "--help")) {
-        Vec_Token_push(&tokens, (Token) { .type = TOKEN_HELP, .option_content = NULL });
+        List_Token_push(&tokens, (Token) { .type = TOKEN_HELP, .option_content = NULL });
         continue;
       }
       else {
         fprintf(stderr, "Error: unrecognized option %s\n", args[arg_index]);
-        Vec_Token_free(&tokens);
-        // return (Option_Vec_Token){ .none = 0x0 };
-        return Vec_Token_UNINIT;
+        List_Token_free(&tokens);
+        // return (Option_List_Token){ .none = 0x0 };
+        return (List_Token){ 0 };
       }
     }
     else {
-      Vec_Token_push(&tokens, (Token){ .type = TOKEN_STRING, .option_content = args[arg_index] });
+      List_Token_push(&tokens, (Token){ .type = TOKEN_STRING, .option_content = args[arg_index] });
       continue;
     }
   }
 
-  // return (Option_Vec_Token){ .some = tokens };
   return tokens;
 }
 
@@ -131,38 +129,38 @@ struct socket_fds spawn_shell_command(char *command) {
   return structure;
 }
 
-declare_heap_array(int)
-define_heap_array(int)
+declare_List(int)
+define_List(int)
 
-declare_heap_array(pid_t)
-define_heap_array(pid_t)
+declare_List(pid_t)
+define_List(pid_t)
 
 typedef struct {
-  Vec_int file_descriptors;
-  Vec_pid_t children;
+  List_int file_descriptors;
+  List_pid_t children;
 } Invocation;
 
-Invocation parse_command_line_arguments(Vec_Token arg_tokens) {
+Invocation parse_command_line_arguments(List_Token arg_tokens) {
   Invocation state;
-  state.file_descriptors = Vec_int_new(4);
-  state.children = Vec_pid_t_new(4);
+  state.file_descriptors = List_int_new(4);
+  state.children = List_pid_t_new(4);
 
-  for_range(size_t, index, 0, arg_tokens.buffer_len) {
-    if (arg_tokens.item_buffer[index].type == TOKEN_HELP) {
+  for_range(size_t, index, 0, arg_tokens.item_count) {
+    if (arg_tokens.items[index].type == TOKEN_HELP) {
       int helptxt_fd = open("help.txt", O_NONBLOCK);
       if (helptxt_fd < 0) {
         fprintf(stderr, "Error: Failed to open help.txt -> %s\
 (you may want to downlaod or view help.txt in the github repor at https://github.com/Krayfighter/pager)",
           strerror(errno)
         );
-      }else { Vec_int_push(&state.file_descriptors, helptxt_fd); }
+      }else { List_int_push(&state.file_descriptors, helptxt_fd); }
       break;
     }
   }
-  for_range(size_t, token_index, 0, arg_tokens.buffer_len) {
-    if (arg_tokens.item_buffer[0].type == TOKEN_SPAWN) {
+  for_range(size_t, token_index, 0, arg_tokens.item_count) {
+    if (arg_tokens.items[0].type == TOKEN_SPAWN) {
       token_index += 1;
-      Token *command_token = Vec_Token_get(&arg_tokens, token_index);
+      Token *command_token = List_Token_get(&arg_tokens, token_index);
       if (command_token == NULL) {
         fprintf(stderr, "Error: expected command string after --spawn\n");
         exit(-1);
@@ -174,17 +172,17 @@ Invocation parse_command_line_arguments(Vec_Token arg_tokens) {
 
       struct socket_fds child_streams = spawn_shell_command(command_str);
 
-      Vec_pid_t_push(&state.children, child_streams.child_id);
+      List_pid_t_push(&state.children, child_streams.child_id);
 
       if (child_streams.stdout < 0 || child_streams.stderr < 0) {
         fprintf(stderr, "Error: failed to spawn child shell command -> %s\n", strerror(errno));
         exit(-1);
       }
-      Vec_int_push(&state.file_descriptors, child_streams.stdout);
-      Vec_int_push(&state.file_descriptors, child_streams.stderr);
+      List_int_push(&state.file_descriptors, child_streams.stdout);
+      List_int_push(&state.file_descriptors, child_streams.stderr);
     }
-    else if (arg_tokens.item_buffer[0].type == TOKEN_STRING) {
-      Token *filename_token = Vec_Token_get(&arg_tokens, token_index);
+    else if (arg_tokens.items[0].type == TOKEN_STRING) {
+      Token *filename_token = List_Token_get(&arg_tokens, token_index);
       char *filename = filename_token->option_content;
 
       int file_fd = open(filename, O_NONBLOCK);
@@ -192,10 +190,10 @@ Invocation parse_command_line_arguments(Vec_Token arg_tokens) {
         fprintf(stderr, "Error: Failed to open file -> %s\n", strerror(errno));
         exit(-1);
       }
-      Vec_int_push(&state.file_descriptors, file_fd);
+      List_int_push(&state.file_descriptors, file_fd);
     }
   }
-  Vec_Token_free(&arg_tokens);
+  List_Token_free(&arg_tokens);
   return state;
 }
 
@@ -206,13 +204,13 @@ int main(int32_t argc, char **argv) {
   save_terminal();
   atexit(restore_terminal);
 
-  Vec_Token tokens = lex_command_line_args(argv, argc);
-  if (tokens.item_buffer == NULL) {
+  List_Token tokens = lex_command_line_args(argv, argc);
+  if (tokens.items == NULL) {
     fprintf(stderr, "Error: Failed to parse command line args (see previous)\n");
     return -1;
   }
-  // Vec_Token tokens = maybe_tokens.some;
-  if (tokens.buffer_len == 0) {
+  // List_Token tokens = maybe_tokens.some;
+  if (tokens.item_count == 0) {
     fprintf(stderr, "Error: missing required argument\n");
     return -1;
   }
@@ -223,49 +221,29 @@ int main(int32_t argc, char **argv) {
 
   Invocation appstate = parse_command_line_arguments(tokens);
 
-  if (appstate.file_descriptors.buffer_len == 0) {
+  if (appstate.file_descriptors.item_count == 0) {
     fprintf(stderr, "!LogicError!: input_stream should never be NULL after argument parser\n");
     return -1;
   }
 
 
-  Vec_Window windows = Vec_Window_new(appstate.file_descriptors.buffer_len);
-  foreach(
-    int, filedes,
-    appstate.file_descriptors.item_buffer,
-    appstate.file_descriptors.buffer_len,
-    {
-      Vec_Window_push(&windows, Window_new(*filedes));
-    }
-  )
-  foreach(
-    Window, window,
-    windows.item_buffer,
-    windows.buffer_len,
-    {
-      Window_spawn_reader(window);
-    }
-  )
+  List_Window windows = List_Window_new(appstate.file_descriptors.item_count);
+  List_foreach(int, appstate.file_descriptors, {
+    List_Window_push(&windows, Window_new(*item));
+  });
+  List_foreach(Window, windows, {
+    Window_spawn_reader(item);
+  });
 
-
-  // Preload a number of lines into the windows before rendering the first frame
-  for (size_t i = 0; i < 20; i += 1) {
-    foreach(
-      Window, window,
-      windows.item_buffer,
-      windows.buffer_len,
-      { Window_update(window); }
-    )
-  }
 
   // TODO implement window selector
 
   Screen screen = (Screen){
     .windows = windows,
-    .frame1 = Vec_Window_get(&windows, 0),
-    .frame2= Vec_Window_get(&windows, 1),
+    .top_window = 0,
     .focus = 0
   };
+
 
   enter_raw_mode();
 
@@ -281,12 +259,9 @@ int main(int32_t argc, char **argv) {
       break;
     }
 
-    foreach(
-      Window, window,
-      windows.item_buffer,
-      windows.buffer_len,
-      { needs_redraw |= Window_update(window); }
-    )
+    List_foreach(Window, windows, {
+      needs_redraw |= Window_update(item);
+    });
 
     if (needs_redraw) {
       Screen_render(&screen);
@@ -301,69 +276,37 @@ int main(int32_t argc, char **argv) {
 
 
   // CLEANUP
-  foreach(
-    Window, window,
-    windows.item_buffer,
-    windows.buffer_len,
-    {
-      Window_free(window);
-    }
-  )
-  Vec_Window_free(&windows);
+  List_foreach(Window, windows, { Window_free(item); });
+  List_Window_free(&windows);
 
-  foreach(
-    int, filedes,
-    appstate.file_descriptors.item_buffer,
-    appstate.file_descriptors.buffer_len,
-    {
-      close(*filedes);
-    }
-  )
-  Vec_int_free(&appstate.file_descriptors);
+  List_foreach(int, appstate.file_descriptors, { close(*item); });
+  List_int_free(&appstate.file_descriptors);
 
-  if (appstate.children.buffer_len != 0) {
-    fprintf(stderr, "DBG: number of children -> %lu\n", appstate.children.buffer_len);
+  if (appstate.children.item_count != 0) {
+    fprintf(stderr, "DBG: number of children -> %lu\n", appstate.children.item_count);
 
-    foreach(
-      pid_t, child_id,
-      appstate.children.item_buffer,
-      appstate.children.buffer_len,
-      {
-        fprintf(stderr, "DBG: killing child process id %i\n", *child_id);
-        kill(*child_id, SIGQUIT);
-      }
-    )
+    List_foreach(pid_t, appstate.children, {
+      fprintf(stderr, "DBG: killing child process (is)%i\n", *item);
+      kill(*item, SIGQUIT);
+    });
 
     for (size_t i = 0; i < 100; i += 1) {
-      bool all_children_dead = true;
-      foreach(
-        pid_t, child_id,
-        appstate.children.item_buffer,
-        appstate.children.buffer_len,
-        {
-          if (*child_id == 0) {
-            int return_status;
-            if (waitpid(*child_id, &return_status, WNOHANG) == *child_id) {
-              *child_id = 0; // indicate that this child process has died
-            }
-            else { all_children_dead = false; }
-          }
+      List_foreach(pid_t, appstate.children, {
+        // int return_state;
+        if (waitpid(*item, NULL, WNOHANG) == *item) {
+          List_pid_t_swapback_delete(&appstate.children, index);
+          index -= 1;
         }
-      )
-      if (all_children_dead) { return 0; }
+      });
+      if (appstate.children.item_count == 0) { return 0; }
       usleep(10000);
     }
 
-    foreach(
-      pid_t, child_id,
-      appstate.children.item_buffer,
-      appstate.file_descriptors.buffer_len,
-      {
-        kill(*child_id, SIGKILL);
-      }
-    )
+    List_foreach(pid_t, appstate.children, {
+      kill(*item, SIGKILL);
+    });
   }
-  Vec_pid_t_free(&appstate.children);
+  List_pid_t_free(&appstate.children);
 
 }
 
