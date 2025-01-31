@@ -13,6 +13,8 @@
 
 #include "interface.h"
 
+#include "plustypes.h"
+
 
 #define ANSI_ESCAPE = 0x1b;
 const char *ANSI_ERASE_UNTIL_END = "\x1b[0J";
@@ -88,37 +90,87 @@ size_t base_10_digits(size_t number) {
 define_List(Window)
 
 
+#define suspend_cancelation(block) { \
+  pthread_setcancelstate(PTHREAD_CANCEL_DISABLE, NULL); \
+  block; \
+  pthread_setcancelstate(PTHREAD_CANCEL_ENABLE, NULL); \
+}
+
+typedef enum {
+  RESIDUAL_STREAM,
+  RESIDUAL_HEAP,
+} ResidualType;
+
+typedef struct {
+  void *residual;
+  ResidualType type;
+} Residual;
+
+uint8_t residuals_buffer[1028]; // this should be more than large enough for now
+FillAllocator residuals_alloc = {
+  .buffer = residuals_buffer,
+  .buffer_size = 1028,
+  .next_space = 0
+};
+_Atomic bool allocator_locked = false;
+
+void free_residuals() {
+  lock_allocator: {
+    if (allocator_locked) { usleep(100); goto lock_allocator; }
+    allocator_locked = true;
+  }
+  Residual *current_residual = (Residual *)residuals_alloc.buffer;
+  while (current_residual->residual != NULL) {
+    switch (current_residual->type) {
+      case RESIDUAL_STREAM: { fclose(current_residual->residual); }; break;
+      case RESIDUAL_HEAP: { free(current_residual->residual); }; break;
+    }
+    current_residual += 1;
+  }
+}
+
 void *Window_read_blocking(void *args) {
   Window *self = args;
-  FILE *source_stream = fdopen(self->source_fd, "r");
-  char *read_buffer = malloc(512);
+  FILE *source_stream;
+  source_stream = fdopen(self->source_fd, "r");
+  try_unlock_alloc: {
+    if (allocator_locked) { usleep(10); goto try_unlock_alloc; }
+    allocator_locked = true;
+    Residual *res = FillAllocator_talloc(&residuals_alloc, Residual, 1);
+    *res = (Residual) {
+      .type = RESIDUAL_STREAM,
+      .residual = source_stream
+    };
+  }
+  allocator_locked = false;
+
+  char read_buffer[512];
 
   while (1) {
     if (self->next_line_is_ready == false) {
       char *reading_ended = fgets(read_buffer, 512, source_stream);
-      if (reading_ended == NULL) {
-        if (errno != 0) {
-          fprintf(stderr, "WARN: encountered a read error before EOF -> %s\n", strerror(errno));
+      suspend_cancelation({
+        if (reading_ended == NULL) {
+          if (errno != 0) {
+            fprintf(stderr, "WARN: encountered a read error before EOF -> %s\n", strerror(errno));
+          }
+          return NULL;
         }
-        return NULL;
-      }
 
-      size_t string_len = strlen(read_buffer);
-      char *new_string = malloc(string_len);
-      memcpy(new_string, read_buffer, string_len);
-      new_string[string_len-1] = '\0';
+        size_t string_len = strlen(read_buffer);
+        char *new_string = malloc(string_len);
+        memcpy(new_string, read_buffer, string_len);
+        new_string[string_len-1] = '\0';
 
-      self->next_line = new_string;
-      self->next_line_is_ready = true;
+        self->next_line = new_string;
+        self->next_line_is_ready = true;
+      });
     }
     else {
       usleep(10);
     }
   }
 
-  fclose(source_stream);
-  
-  return NULL; // IDK why this pthread want the entrypoint to return a void pointer
 }
 
 Window Window_new(int source) {
@@ -270,7 +322,7 @@ void Screen_render(Screen *self) {
   }
 
   if (frame1 == NULL) {
-    fprintf(stderr, "WARN: invalid condition, no windows registered");
+    fprintf(stderr, "WARN: invalid condition, no windows registered\n");
     return;
   }
   bool split_mode = frame2 != NULL;

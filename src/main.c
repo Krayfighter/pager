@@ -10,6 +10,7 @@
 #include "sys/socket.h"
 #include "sys/fcntl.h"
 #include <fcntl.h>
+#include <pthread.h>
 #include "signal.h"
 #include "sys/wait.h"
 
@@ -238,6 +239,12 @@ int main(int32_t argc, char **argv) {
 
   // TODO implement window selector
 
+  // Screen screen = (Screen){
+  //   .windows = windows,
+  //   .top_window = 0,
+  //   .focus = 0
+  // };
+  // Screen screen = Screen_new(windows);
   Screen screen = (Screen){
     .windows = windows,
     .top_window = 0,
@@ -276,15 +283,11 @@ int main(int32_t argc, char **argv) {
 
 
   // CLEANUP
-  List_foreach(Window, windows, { Window_free(item); });
-  List_Window_free(&windows);
 
   List_foreach(int, appstate.file_descriptors, { close(*item); });
   List_int_free(&appstate.file_descriptors);
 
   if (appstate.children.item_count != 0) {
-    fprintf(stderr, "DBG: number of children -> %lu\n", appstate.children.item_count);
-
     List_foreach(pid_t, appstate.children, {
       fprintf(stderr, "DBG: killing child process (is)%i\n", *item);
       kill(*item, SIGQUIT);
@@ -298,7 +301,7 @@ int main(int32_t argc, char **argv) {
           index -= 1;
         }
       });
-      if (appstate.children.item_count == 0) { return 0; }
+      if (appstate.children.item_count == 0) { goto after_children_killed; }
       usleep(10000);
     }
 
@@ -306,6 +309,23 @@ int main(int32_t argc, char **argv) {
       kill(*item, SIGKILL);
     });
   }
+  after_children_killed: {};
+
+  for (uint8_t window = 0; window < screen.windows.item_count; window += 1) {
+    // int result = pthread_kill(screen.windows.items[window].reader_thread, SIGQUIT);
+    // if (result != 0) {
+    //   fprintf(stderr, "WARN: failed to send signal to thread, %s\n", strerror(errno));
+    // }
+    pthread_t thread_id = screen.windows.items[window].reader_thread;
+    pthread_cancel(thread_id);
+    pthread_join(thread_id, NULL);
+  }
+
+  List_foreach(Window, windows, { Window_free(item); });
+  List_Window_free(&windows);
+
+  free_residuals();
+
   List_pid_t_free(&appstate.children);
 
 }

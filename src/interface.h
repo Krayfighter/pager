@@ -1,10 +1,12 @@
 
 #include "stdio.h"
 #include "stdbool.h"
-#include <aio.h>
-#include <stdint.h>
+#include "stdint.h"
 
 #include "plustypes.h"
+
+#ifndef INTERFACE_H
+#define INTERFACE_H
 
 
 void move_cursor_to_col(FILE *stream, size_t col);
@@ -51,6 +53,9 @@ typedef union {
   uint64_t integer;
 } KeyboardCode;
 
+// void cleanup_thread(pthread_t thread_id);
+void free_residuals();
+
 Window Window_new(int source_fd);
 void Window_spawn_reader(Window *self);
 // returns whether the window has been updated
@@ -78,5 +83,5 @@ InterfaceCommand Screen_read_stdin(Screen *self, bool *needs_redraw);
 void Screen_spawn_stdin_reader(Screen *self);
 void Screen_render(Screen *self);
 
-
+#endif
 
