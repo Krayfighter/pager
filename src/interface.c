@@ -252,18 +252,30 @@ void Window_move_down(Window *self, size_t count) {
 
 
 
-WindowControl Window_handle_input(Window *self, size_t tty_rows, bool *needs_redraw) {
+// WindowControl Window_handle_input(Window *self, uint16_t window_height, bool *needs_redraw) {
+WindowControl Screen_handle_input(Screen *self) {
+  // Window *acting_window = &self->windows.items[self->focus];
+  Frame current_frame = (self->focus == self->top_window) ? self->top : self->bottom;
+
   KeyboardCode buffer = (KeyboardCode){ .integer = 0x0 };
   size_t read_size = read(fileno(stdin), buffer.buffer, 4);
   if (read_size != 0) {
     switch(buffer.integer) {
-      case WINDOW_MOVE_UP: Window_move_up(self, 1); *needs_redraw = true; break;
-      case WINDOW_PAGE_UP: Window_move_up(self, tty_rows); *needs_redraw = true; break;
-      case WINDOW_MOVE_DOWN: Window_move_down(self, 1); *needs_redraw = true; break;
-      case WINDOW_PAGE_DOWN: Window_move_down(self, tty_rows); *needs_redraw = true; break;
+      case WINDOW_MOVE_UP: Window_move_up(current_frame.source, 1); self->needs_redraw = true; break;
+      case WINDOW_PAGE_UP: {
+        fprintf(stderr, "DBG: received page down: moveing &lu lines\n");
+        Window_move_up(current_frame.source, current_frame.height);
+        self->needs_redraw = true;
+      } break;
+      case WINDOW_MOVE_DOWN: Window_move_down(current_frame.source, 1); self->needs_redraw = true; break;
+      case WINDOW_PAGE_DOWN: {
+        fprintf(stderr, "DBG: received page up\n");
+        Window_move_down(current_frame.source, current_frame.height);
+        self->needs_redraw = true;
+      } break;
       case WINDOW_QUIT: return WINDOW_QUIT;
-      case WINDOW_SWITCH_NEXT: *needs_redraw = true; return WINDOW_SWITCH_NEXT;
-      case WINDOW_SWITCH_PREV: *needs_redraw = true; return WINDOW_SWITCH_PREV;
+      case WINDOW_SWITCH_NEXT: self->needs_redraw = true; return WINDOW_SWITCH_NEXT;
+      case WINDOW_SWITCH_PREV: self->needs_redraw = true; return WINDOW_SWITCH_PREV;
       default: return WINDOW_CONTROL_NONE;
     }
   }
@@ -277,17 +289,40 @@ void Window_free(Window *self) {
   List_CharString_free(&self->lines);
 }
 
+typedef struct {
+  Window *source;
+  uint16_t offset_x, offset_y, width, height;
+} LayoutSlaveWindow;
+
+typedef struct {
+  LayoutSlaveWindow *source, split;
+  uint16_t offset_x, offset_y, width, height;
+} LayoutMaster;
+
+typedef union {
+  LayoutSlaveWindow slave_window;
+  LayoutMaster master_window;
+} LayoutUnion;
+
+typedef enum {
+  LAYOUT_MASTER,
+  LAYOUT_SLAVE_WINDOW,
+} LayoutType;
+
+typedef struct {
+  LayoutUnion block;
+  LayoutType type;
+} LayoutBlock;
+
+
 typedef struct winsize TTY_Dims;
 
-InterfaceCommand Screen_read_stdin(Screen *self, bool *needs_redraw) {
-  Window *focused_window = &self->windows.items[self->focus];
+InterfaceCommand Screen_read_stdin( Screen *self ) {
+  // Window *focused_window = &self->windows.items[self->focus];
   TTY_Dims tty_dims;
   ioctl(STDOUT_FILENO, TIOCGWINSZ, &tty_dims);
-  WindowControl code = Window_handle_input(focused_window, tty_dims.ws_row, needs_redraw);
+  WindowControl code = Screen_handle_input(self);
   if (code == WINDOW_QUIT) { return INTERFACE_RESULT_QUIT; }
-  // TODO change window_switching to operate on non-empty windows
-  // else if (code == WINDOW_SWITCH_NEXT && (self->focus+1) < self->windows.item_count) {
-  // NOTE these implement wraping focuse that skips empty windows
   else if (code == WINDOW_SWITCH_NEXT) {
     self->focus += 1;
     for (uint16_t i = self->focus; i < self->windows.item_count; i += 1) {
@@ -339,35 +374,66 @@ uint16x2 calculate_window_dims(TTY_Dims dims) {
   }
 }
 
+typedef struct {
+  Window *source;
+  uint16_t offset_x, offset_y, width, height;
+} WindowContext;
+
+typedef struct {
+  WindowContext top;
+  WindowContext bot;
+} Layout;
+
+bool Layout_is_empty(Layout *self) {
+  return self->top.source == NULL && self->bot.source == NULL;
+}
+
+bool Layout_is_split(Layout *self) {
+  if (Layout_is_empty(self)) { return false; }
+  if (self->top.source == NULL && self->bot.source != NULL) {
+    self->top.source = self->bot.source;
+    self->bot.source = NULL;
+    return false;
+  }else if (self->top.source != NULL && self->top.source == NULL) {
+    return false;
+  }
+  return true;
+}
+
 void Screen_render(Screen *self) {
   TTY_Dims tty_dims;
   ioctl(STDOUT_FILENO, TIOCGWINSZ, &tty_dims);
 
-  Window *frame1, *frame2;
-  frame1 = frame2 = NULL;
+  // Window *frame1, *frame2;
+  self->top.source = self->bottom.source = NULL;
   for (size_t i = 0; i < self->windows.item_count; i += 1) {
     if (self->windows.items[i].lines.item_count == 0) { continue; }
-    if (frame1 == NULL) { frame1 = &self->windows.items[i]; }
-    else if (frame2 == NULL) { frame2 = &self->windows.items[i]; }
+    if (self->top.source == NULL) { self->top.source = &self->windows.items[i]; }
+    else if (self->bottom.source == NULL) { self->bottom.source = &self->windows.items[i]; }
   }
 
-  if (frame1 == NULL) {
+  if (self->top.source == NULL) {
     fprintf(stderr, "WARN: invalid condition, no windows registered\n");
     return;
   }
-  bool split_mode = frame2 != NULL;
+  self->split_mode = self->bottom.source != NULL;
 
-  size_t top_window_rows;
-  size_t bottom_window_rows;
-  if (split_mode) {
+  // uint16_t top_window_rows;
+  // uint16_t bottom_window_rows;
+  if (self->split_mode) {
     uint16x2 window_sizes = calculate_window_dims(tty_dims);
-    top_window_rows = window_sizes.a;
-    bottom_window_rows = window_sizes.b;
-  }else { top_window_rows = tty_dims.ws_row; }
+    self->top.height = window_sizes.a;
+    // top_window_rows = window_sizes.a;
+    self->bottom.height = window_sizes.b;
+    // bottom_window_rows = window_sizes.b;
+  // }else { top_window_rows = tty_dims.ws_row; }
+  }else { self->top.height = tty_dims.ws_row; }
   
 
-  if (frame1 != NULL) { Window_update(frame1); }
-  if (frame2 != NULL) { Window_update(frame2 ); }
+  // if (frame1 != NULL) { Window_update(frame1); }
+  // if (frame2 != NULL) { Window_update(frame2 ); }
+  Window_update(self->top.source);
+  if (self->split_mode) { Window_update(self->bottom.source); }
 
 
 
@@ -390,14 +456,17 @@ void Screen_render(Screen *self) {
   move_cursor_to_position(stdout, tty_dims.ws_row, 0);
   for (uint16_t i = 0; i < tty_dims.ws_col; i += 1) { fprintf(stdout, "="); }
 
-  if (!split_mode) { top_window_rows -= 1; } // this is to fix sizing for the bottom border
-  Window_render(frame1, 2, 2, tty_dims.ws_col - 2, top_window_rows - 2, self->focus == 0);
-  if (split_mode) {
+  // TODO move this into a new Frame_render function to
+  // combine functionality across Window_render and Screen_render to
+  // a single source
+  if (!self->split_mode) { self->top.height -= 1; } // this is to fix sizing for the bottom border
+  Window_render(self->top.source, 2, 2, tty_dims.ws_col - 2, self->top.height- 2, self->focus == 0);
+  if (self->split_mode) {
     // render divider
-    move_cursor_to_position(stdout, top_window_rows+1, 0);
+    move_cursor_to_position(stdout, self->top.height + 1, 0);
     for_range(size_t, i, 0, tty_dims.ws_col) { fprintf(stdout, "="); }
 
-    Window_render(frame2, 2, top_window_rows + 2, tty_dims.ws_col - 2, bottom_window_rows - 3, self->focus == 1);
+    Window_render(self->bottom.source, 2, self->top.height + 2, tty_dims.ws_col - 2, self->bottom.height - 3, self->focus == 1);
   }
   fflush(stdout);
 

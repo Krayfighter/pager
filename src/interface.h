@@ -63,7 +63,7 @@ bool Window_update(Window *self);
 void Window_render(Window *self, uint16_t offset_x, uint16_t offset_y, uint16_t width, uint16_t height, bool focused);
 void Window_move_up(Window *self, size_t count);
 void Window_move_down(Window *self, size_t count);
-WindowControl Window_handle_input(Window *self, size_t tty_rows, bool *needs_redraw);
+WindowControl Window_handle_input(Window *self, uint16_t tty_rows, bool *needs_redraw);
 void Window_free(Window *self);
 
 typedef enum {
@@ -71,15 +71,24 @@ typedef enum {
   INTERFACE_RESULT_QUIT,
 } InterfaceCommand;
 
+typedef struct {
+  Window *source;
+  uint16_t offset_x, offset_y, width, height;
+} Frame;
+
 // a conecetpual screen that consumes the entire tty with
 // one or more Windows dividing it
 typedef struct {
   List_Window windows;
   uint8_t top_window;
   uint8_t focus;
+  bool split_mode;
+  Frame top, bottom;
+  bool needs_redraw;
 } Screen;
 
-InterfaceCommand Screen_read_stdin(Screen *self, bool *needs_redraw);
+InterfaceCommand Screen_read_stdin( Screen *self
+);
 void Screen_spawn_stdin_reader(Screen *self);
 void Screen_render(Screen *self);
 

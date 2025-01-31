@@ -239,12 +239,6 @@ int main(int32_t argc, char **argv) {
 
   // TODO implement window selector
 
-  // Screen screen = (Screen){
-  //   .windows = windows,
-  //   .top_window = 0,
-  //   .focus = 0
-  // };
-  // Screen screen = Screen_new(windows);
   Screen screen = (Screen){
     .windows = windows,
     .top_window = 0,
@@ -260,17 +254,20 @@ int main(int32_t argc, char **argv) {
 
   // MAINLOOP
   while (1) {
-    bool needs_redraw = false;
+    // bool needs_redraw = false;
+    screen.needs_redraw = false;
 
-    if (Screen_read_stdin(&screen, &needs_redraw) == INTERFACE_RESULT_QUIT) {
+    if (Screen_read_stdin(&screen) == INTERFACE_RESULT_QUIT) {
       break;
     }
 
+    const size_t MAX_EXPECTED_TERMINAL_ROWS = 200;
     List_foreach(Window, windows, {
-      needs_redraw |= Window_update(item);
+      size_t window_lines = item->lines.item_count;
+      screen.needs_redraw |= (Window_update(item) && window_lines < 200);
     });
 
-    if (needs_redraw) {
+    if (screen.needs_redraw) {
       Screen_render(&screen);
     }
 
