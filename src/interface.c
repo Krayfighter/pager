@@ -286,11 +286,41 @@ InterfaceCommand Screen_read_stdin(Screen *self, bool *needs_redraw) {
   WindowControl code = Window_handle_input(focused_window, tty_dims.ws_row, needs_redraw);
   if (code == WINDOW_QUIT) { return INTERFACE_RESULT_QUIT; }
   // TODO change window_switching to operate on non-empty windows
-  else if (code == WINDOW_SWITCH_NEXT && (self->focus+1) < self->windows.item_count) {
+  // else if (code == WINDOW_SWITCH_NEXT && (self->focus+1) < self->windows.item_count) {
+  // NOTE these implement wraping focuse that skips empty windows
+  else if (code == WINDOW_SWITCH_NEXT) {
     self->focus += 1;
-  }
-  else if (code == WINDOW_SWITCH_PREV && self->focus != 0) {
+    for (uint16_t i = self->focus; i < self->windows.item_count; i += 1) {
+      if (self->windows.items[i].lines.item_count > 0) {
+        self->focus = i;
+        return INTERFACE_RESULT_NONE;
+      }
+    }
+    for (uint16_t i = 0; i < self->focus; i += 1) {
+      if (self->windows.items[i].lines.item_count > 0) {
+        self->focus = i;
+        return INTERFACE_RESULT_NONE;
+      }
+    }
     self->focus -= 1;
+  }
+  else if (code == WINDOW_SWITCH_PREV) {
+    if (self->focus == 0) { self->focus = self->windows.item_count; }
+    // else { self->focus -= 1; }
+    self->focus -= 1;
+    for (int16_t i = self->focus; i >= 0; i -= 1) {
+      if (self->windows.items[i].lines.item_count > 0) {
+        self->focus = i;
+        return INTERFACE_RESULT_NONE;
+      }
+    }
+    for (uint16_t i = self->windows.item_count - 1; i > self->focus; i -= 1) {
+      if (self->windows.items[i].lines.item_count > 0) {
+        self->focus = i;
+        return INTERFACE_RESULT_NONE;
+      }
+    }
+    self->focus += 1;
   }
   return INTERFACE_RESULT_NONE;
 }
