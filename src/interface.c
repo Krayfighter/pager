@@ -14,6 +14,7 @@
 #include "interface.h"
 
 #include "plustypes.h"
+#include <bits/pthreadtypes.h>
 
 
 #define ANSI_ESCAPE = 0x1b;
@@ -112,13 +113,10 @@ FillAllocator residuals_alloc = {
   .buffer_size = 1028,
   .next_space = 0
 };
-_Atomic bool allocator_locked = false;
+pthread_mutex_t residuals_mutex = PTHREAD_MUTEX_INITIALIZER;
 
 void free_residuals() {
-  lock_allocator: {
-    if (allocator_locked) { usleep(100); goto lock_allocator; }
-    allocator_locked = true;
-  }
+  pthread_mutex_lock(&residuals_mutex);
   Residual *current_residual = (Residual *)residuals_alloc.buffer;
   while (current_residual->residual != NULL) {
     switch (current_residual->type) {
@@ -127,48 +125,49 @@ void free_residuals() {
     }
     current_residual += 1;
   }
+  pthread_mutex_unlock(&residuals_mutex);
 }
 
 void *Window_read_blocking(void *args) {
   Window *self = args;
   FILE *source_stream;
   source_stream = fdopen(self->source_fd, "r");
-  try_unlock_alloc: {
-    if (allocator_locked) { usleep(10); goto try_unlock_alloc; }
-    allocator_locked = true;
-    Residual *res = FillAllocator_talloc(&residuals_alloc, Residual, 1);
-    *res = (Residual) {
-      .type = RESIDUAL_STREAM,
-      .residual = source_stream
-    };
-  }
-  allocator_locked = false;
+  pthread_mutex_lock(&residuals_mutex);
+  Residual *res = FillAllocator_talloc(&residuals_alloc, Residual, 1);
+  *res = (Residual) {
+    .type = RESIDUAL_STREAM,
+    .residual = source_stream
+  };
+  pthread_mutex_unlock(&residuals_mutex);
 
   char read_buffer[512];
 
   while (1) {
-    if (self->next_line_is_ready == false) {
-      char *reading_ended = fgets(read_buffer, 512, source_stream);
-      suspend_cancelation({
-        if (reading_ended == NULL) {
-          if (errno != 0) {
-            fprintf(stderr, "WARN: encountered a read error before EOF -> %s\n", strerror(errno));
-          }
-          return NULL;
+    // if (self->next_line_is_ready == false) {
+    char *reading_ended = fgets(read_buffer, 512, source_stream);
+    suspend_cancelation({
+      if (reading_ended == NULL) {
+        if (errno != 0) {
+          fprintf(stderr, "WARN: encountered a read error before EOF -> %s\n", strerror(errno));
         }
+        return NULL;
+      }
 
-        size_t string_len = strlen(read_buffer);
-        char *new_string = malloc(string_len);
-        memcpy(new_string, read_buffer, string_len);
-        new_string[string_len-1] = '\0';
+      size_t string_len = strlen(read_buffer);
+      char *new_string = malloc(string_len);
+      memcpy(new_string, read_buffer, string_len);
+      new_string[string_len-1] = '\0';
 
-        self->next_line = new_string;
-        self->next_line_is_ready = true;
-      });
-    }
-    else {
-      usleep(10);
-    }
+      pthread_mutex_lock(&self->new_lines_mutex);
+      List_CharString_push(&self->new_lines, new_string);
+      // self->next_line = new_string;
+      // self->next_line_is_ready = true;
+      pthread_mutex_unlock(&self->new_lines_mutex);
+    });
+    // }
+    // else {
+    //   usleep(10);
+    // }
   }
 
 }
@@ -178,6 +177,8 @@ Window Window_new(int source) {
     .lines = List_CharString_new(8),
     .window_start = 0,
     .source_fd = source,
+    .new_lines = List_CharString_new(8),
+    .new_lines_mutex = PTHREAD_MUTEX_INITIALIZER,
   };
   return self;
 }
@@ -199,11 +200,16 @@ void push_buffer_line(char *buffer, size_t start_index, size_t buffer_index, Lis
 
 bool Window_update(Window *self) {
 
-  if (self->next_line_is_ready) {
-    List_CharString_push(&self->lines, (CharString){ self->next_line });
-    self->next_line_is_ready = false;
+  if (self->new_lines.item_count > 0) {
+    pthread_mutex_lock(&self->new_lines_mutex);
+    List_CharString_pushall(&self->lines, &self->new_lines);
+    self->new_lines.item_count = 0;
+    // self->next_line_is_ready = false;
+    pthread_mutex_unlock(&self->new_lines_mutex);
     return true;
   }
+  // if (self->next_line_is_ready) {
+  // }
   return false;
 }
 
@@ -263,13 +269,11 @@ WindowControl Screen_handle_input(Screen *self) {
     switch(buffer.integer) {
       case WINDOW_MOVE_UP: Window_move_up(current_frame.source, 1); self->needs_redraw = true; break;
       case WINDOW_PAGE_UP: {
-        fprintf(stderr, "DBG: received page down: moveing &lu lines\n");
         Window_move_up(current_frame.source, current_frame.height);
         self->needs_redraw = true;
       } break;
       case WINDOW_MOVE_DOWN: Window_move_down(current_frame.source, 1); self->needs_redraw = true; break;
       case WINDOW_PAGE_DOWN: {
-        fprintf(stderr, "DBG: received page up\n");
         Window_move_down(current_frame.source, current_frame.height);
         self->needs_redraw = true;
       } break;
@@ -287,6 +291,12 @@ void Window_free(Window *self) {
     free(*item);
   });
   List_CharString_free(&self->lines);
+
+  pthread_mutex_lock(&self->new_lines_mutex);
+  List_foreach(CharString, self->new_lines, {
+    free(*item);
+  });
+  List_CharString_free(&self->new_lines);
 }
 
 typedef struct {

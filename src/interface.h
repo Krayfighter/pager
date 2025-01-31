@@ -4,6 +4,7 @@
 #include "stdint.h"
 
 #include "plustypes.h"
+#include <bits/pthreadtypes.h>
 
 #ifndef INTERFACE_H
 #define INTERFACE_H
@@ -24,14 +25,16 @@ typedef char * CharString;
 declare_List(CharString)
 
 typedef struct {
+  pthread_mutex_t new_lines_mutex;
   List_CharString lines;
+  List_CharString new_lines;
   size_t window_start;
   pthread_t reader_thread;
   int source_fd;
-  char *next_line;
+  // char *next_line;
 
   // communication to reader thread
-  _Atomic bool next_line_is_ready;
+  // _Atomic bool next_line_is_ready;
 } Window;
 
 declare_List(Window)
@@ -87,8 +90,7 @@ typedef struct {
   bool needs_redraw;
 } Screen;
 
-InterfaceCommand Screen_read_stdin( Screen *self
-);
+InterfaceCommand Screen_read_stdin( Screen *self );
 void Screen_spawn_stdin_reader(Screen *self);
 void Screen_render(Screen *self);
 
