@@ -3,5 +3,6 @@
 pager
 *test.txt
 *vgcore*
+gmon.out
 
 stable/
