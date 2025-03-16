@@ -13,6 +13,7 @@
 #include <pthread.h>
 #include "signal.h"
 #include "sys/wait.h"
+#include "errno.h"
 
 #include "interface.h"
 
@@ -53,7 +54,7 @@ List_Token lex_command_line_args(char **args, size_t arg_count) {
         continue;
       }
       else {
-        fprintf(stderr, "Error: unrecognized option %s\n", args[arg_index]);
+        fprintf(stderr, "unrecognized option %s\n", args[arg_index]);
         List_Token_free(&tokens);
         // return (Option_List_Token){ .none = 0x0 };
         return (List_Token){ 0 };
@@ -80,18 +81,18 @@ struct socket_fds spawn_shell_command(char *command) {
   int subproc_stdout_pair[2];
   int subproc_stderr_pair[2];
 
-  if (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stdin_pair) < 0) {
-    fprintf(stderr, "Error: failed to create local socket -> %s\n", strerror(errno));
-    exit(-1);
-  }
-  if (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stdout_pair) < 0) {
-    fprintf(stderr, "Error: failed to create local socket -> %s\n", strerror(errno));
-    exit(-1);
-  }
-  if (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stderr_pair) < 0) {
-    fprintf(stderr, "Error: failed to create local socket -> %s\n", strerror(errno));
-    exit(-1);
-  }
+  expect(
+    (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stdin_pair) >= 0),
+    "failed to create local domain socket"
+  );
+  expect(
+    (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stdout_pair) >= 0),
+    "failed to create local domain socket"
+  );
+  expect(
+    (socketpair(PF_LOCAL, SOCK_STREAM, 0, subproc_stderr_pair) >= 0),
+    "failed to create local domain socket"
+  )
 
   pid_t process_id;
   process_id = fork();
@@ -229,7 +230,7 @@ int main(int32_t argc, char **argv) {
 
   expect(
     (appstate.file_descriptors.item_count > 0),
-    "Error: no input to page over"
+    "no input to page over"
   );
 
 
