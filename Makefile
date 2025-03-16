@@ -1,7 +1,7 @@
 
 
 run: pager
-	./pager --spawn "cd .. && ls -R" 2> dbg.txt
+	./pager --spawn "cd /home && ls -R" 2> dbg.txt
 
 test: pager
 	./pager --spawn "cd /home/aiden/code/flark && make"

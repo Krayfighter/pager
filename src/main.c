@@ -17,6 +17,7 @@
 #include "interface.h"
 
 #include "plustypes.h"
+#include "pt_error.h"
 
 
 enum TokenType {
@@ -210,22 +211,26 @@ int main(int32_t argc, char **argv) {
     fprintf(stderr, "Error: Failed to parse command line args (see previous)\n");
     return -1;
   }
-  // List_Token tokens = maybe_tokens.some;
-  if (tokens.item_count == 0) {
-    fprintf(stderr, "Error: missing required argument\n");
-    return -1;
-  }
-
-  for_range(size_t, i, 0, argc) {
-    fprintf(stderr, "DBG cli arg -> %s\n", argv[i]);
-  }
 
   Invocation appstate = parse_command_line_arguments(tokens);
 
-  if (appstate.file_descriptors.item_count == 0) {
-    fprintf(stderr, "!LogicError!: input_stream should never be NULL after argument parser\n");
-    return -1;
+  if (!isatty(STDIN_FILENO)) {
+    int piped_input_fd = dup(STDIN_FILENO);
+    expect((piped_input_fd >= 0), "Failed to duplicate STDIN_FILENO which is NOT a tty");
+    int controlling_tty_input = open("/dev/tty", 0x0);
+    expect((controlling_tty_input >= 0), "Failed to open controlling terminal from /dev/tty");
+    expect(
+      (dup2(controlling_tty_input, STDIN_FILENO) >= 0),
+      "Failed to duplicate fd to replace STDIN with the controlling terminal"
+    );
+
+    List_int_push(&appstate.file_descriptors, piped_input_fd);
   }
+
+  expect(
+    (appstate.file_descriptors.item_count > 0),
+    "Error: no input to page over"
+  );
 
 
   List_Window windows = List_Window_new(appstate.file_descriptors.item_count);
