@@ -1,0 +1,9 @@
+
+-Wall
+-Wextra
+-Wpedantic
+-DTEST
+-DDEBUG
+-std=gnu23
+-Itermcodes
+
