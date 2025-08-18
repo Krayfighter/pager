@@ -1475,30 +1475,30 @@ size_t BufferTable_insert_ChildBuffer(BufferTable *self, char *command, char  **
 		return child_buffer_id;
 	}
 }
-
+static inline size_t BufferTable_get_strtable_id(BufferTable *self, size_t buffer_id);
 void BufferTable_display(
 	BufferTable *self, IOBuffer *buffer, size_t entity_id,
 	uint16_t offset_cols, uint16_t offset_rows,
 	uint16_t render_cols, uint16_t render_rows
 ) {
 
-	size_t strtable_rowid;
-	switch (self->entity_table.entity_kinds[entity_id]) {
-		case BUFFER_INVALID: abort();
-		case BUFFER_STATIC: {
-			strtable_rowid = self->entity_table.entities[entity_id].static_buffer.strtable_row;
-		}; break;
-		case BUFFER_READER: {
-			strtable_rowid = self->entity_table.entities[entity_id].reader_buffer.strtable_row;
-		}; break;
-		case BUFFER_CHILD: {
-			fprintf(stderr, "Error: invalid state, cannot render child buffer directly\n");
-			abort();
-		}; break;
-		#ifdef DEBUG
-		default: abort();
-		#endif
-	};
+	size_t strtable_rowid = BufferTable_get_strtable_id(self, entity_id);
+	// switch (self->entity_table.entity_kinds[entity_id]) {
+	// 	case BUFFER_INVALID: abort();
+	// 	case BUFFER_STATIC: {
+	// 		strtable_rowid = self->entity_table.entities[entity_id].static_buffer.strtable_row;
+	// 	}; break;
+	// 	case BUFFER_READER: {
+	// 		strtable_rowid = self->entity_table.entities[entity_id].reader_buffer.strtable_row;
+	// 	}; break;
+	// 	case BUFFER_CHILD: {
+	// 		fprintf(stderr, "Error: invalid state, cannot render child buffer directly\n");
+	// 		abort();
+	// 	}; break;
+	// 	#ifdef DEBUG
+	// 	default: abort();
+	// 	#endif
+	// };
 
 	String *strings = self->string_table.strings_col[strtable_rowid];
 	StringsData strings_data = self->string_table.data_col[strtable_rowid];
@@ -1947,14 +1947,22 @@ void update_window_size(int _signum) {
 String help_strings[] = {
 	String_of("Pager - by Aiden Kring <aidenjkring@gmail.com>"),
 	String_of("______________________________________________"),
+	String_of(""),
 	String_of("Navigation"),
+	String_of("----------"),
 	String_of("Up          'k' or ↑"),
 	String_of("Down        'j' or ↓"),
 	String_of("Page Up     <PgUp>"),
 	String_of("Page Down   <PgDn>"),
 	String_of("Buffer Next 'l'"),
 	String_of("Buffer Prev 'h'"),
-	String_of("Quit        'q' or <Escape>")
+	String_of("Quit        'q' or <Escape>"),
+	String_of(""),
+	String_of("Invokation"),
+	String_of("----------"),
+	String_of("-h or --help        Opens this buffer"),
+	String_of("-s or --spawn <cmd> Page over the outputs of a command"),
+	String_of("<filename>          Open `filename` in a buffer")
 };
 
 const size_t help_strings_count = sizeof(help_strings) / sizeof(help_strings[0]);
@@ -1964,6 +1972,7 @@ int testing_main();
 void print_keycodes();
 int main(int argc, char **argv) {
 	// TODO IOBuffer_write_realloc function
+	// TODO user-defined key bindings
 
 	// Call testing main when compiled for tests
 	#ifdef TEST
@@ -2104,10 +2113,11 @@ int main(int argc, char **argv) {
 	// size_t buffer_id = BufferTable_insert_ReaderBuffer(
 	// 	&buffer_table, (struct pollfd) { .fd = open_file, .events = POLLIN }
 	// );
-
+	uint8_t needs_redraw = true;
 	while (true) {
 		int poll_result = poll(buffer_table.pollfd_table.fds, buffer_table.pollfd_table.fds_max, 100);
-		if (poll_result == 0) {
+		if (poll_result == 0 && !needs_redraw) {
+			// if (needs_redraw) { goto DRAW_SCREEN; }
 			#define NANOS 1
 			#define MICROS 1000
 			#define MILLIS 1000 * 1000
@@ -2120,7 +2130,7 @@ int main(int argc, char **argv) {
 			continue;
 		}
 
-		uint8_t needs_redraw = false;
+		// uint8_t needs_redraw = false;
 		uint16_t render_height = window_size.ws_row - 2;
 		uint16_t render_width = window_size.ws_col - 2;
 
@@ -2208,6 +2218,8 @@ int main(int argc, char **argv) {
 		);
 
 		IOBuffer_flush_to(&out_buf, STDOUT_FILENO);
+
+		needs_redraw = false;
 
 		// pid_t pid = getpid();
 		// fprintf(stdout, "\npid -> %i", pid);
