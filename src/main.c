@@ -1,5 +1,8 @@
 
-#define __GNU_SOURCE
+#define _GNU_SOURCE
+#define _XOPEN_SOURCE 700
+#define _XOPEN_SOURCE_EXTENDED
+#define _FORTIFY_SOURCE 2
 
 #include "stdint.h"
 #include "stddef.h"
@@ -864,37 +867,29 @@ typedef struct {
 	size_t strtable_row;
 } StaticBuffer;
 
-
-String help_strings[] = {
-	String_of("Pager - by Aiden Kring <aidenjkring@gmail.com>"),
-	String_of("______________________________________________"),
-	String_of("Navigation"),
-	String_of("Up          'k' or ↑"),
-	String_of("Down        'j' or ↓"),
-	String_of("Page Up     <PgUp>"),
-	String_of("Page Down   <PgDn>"),
-	String_of("Buffer Next 'l'"),
-	String_of("Buffer Prev 'h'"),
-	String_of("Quit        'q' or <Escape>")
-};
-
-const size_t help_strings_count = sizeof(help_strings) / sizeof(help_strings[0]);
-
 typedef struct {
 	IOBuffer buffer;
 	size_t strtable_row;
 	size_t next_line_start;
 } ReaderBuffer;
 
+typedef struct {
+	size_t stdout_reader_id;
+	size_t stderr_reader_id;
+	pid_t child_id;
+} ChildBuffer;
+
 typedef union {
 	StaticBuffer static_buffer;
 	ReaderBuffer reader_buffer;
+	ChildBuffer child_buffer;
 } BufferEntity;
 
 typedef enum: uint8_t {
 	BUFFER_INVALID = 0,
 	BUFFER_STATIC,
 	BUFFER_READER,
+	BUFFER_CHILD,
 } BufferEntityKind;
 
 typedef struct {
@@ -908,24 +903,17 @@ BufferEntityTable BufferEntityTable_create() {
 	#define DEFAULT_BUFFER_ENTITY_COUNT 8
 
 	void *entities = malloc(sizeof(BufferEntity) * DEFAULT_BUFFER_ENTITY_COUNT);
-	if (entities == NULL) { goto FAILED_ENTITIES_MALLOC; }
+	assert(entities != NULL);
 
 	void *entity_kinds = malloc(sizeof(BufferEntityKind) * DEFAULT_BUFFER_ENTITY_COUNT);
-	if (entity_kinds == NULL) { goto FAILED_ENTITY_KINDS_MALLOC; }
+	assert(entity_kinds != NULL);
 	memset(entity_kinds, 0x0, sizeof(BufferEntityKind) * DEFAULT_BUFFER_ENTITY_COUNT);
-
-	
 
 	return (BufferEntityTable) {
 		.entities = entities,
 		.entity_kinds = entity_kinds,
 		.entities_max = DEFAULT_BUFFER_ENTITY_COUNT
 	};
-
-	FAILED_ENTITY_KINDS_MALLOC: {};
-	free(entities);
-	FAILED_ENTITIES_MALLOC: {};
-	return (BufferEntityTable){ 0 };
 }
 
 #ifdef TEST
@@ -1006,19 +994,14 @@ uint8_t TEST_BufferEntityTable_insert() {
 	size_t table_size = table.entities_max;
 	for (size_t i = 0; i <= table_size; i += 1) {
 		size_t entity_id = BufferEntityTable_insert(&table, (BufferEntity){ 0 }, BUFFER_STATIC);
-		// if (entity_id != i) { return 1; }
 		expect(entity_id == i, "Failed insert");
 	}
-	// if (table.entities_max != table_size) { return 1; }
 	expect(table.entities_max == table_size * 2, "Unexpected row count (no realloc ?)");
-	// expect(row_count == table.row_count + 1, );
 
 	size_t entity_id = BufferEntityTable_insert(&table, (BufferEntity){ 0 }, BUFFER_STATIC);
-	// if (entity_id != table_size + 1) { return 1; }
 	expect(entity_id == table_size + 1, "Unexpected row count (no realloc ?)");
 
 	for (size_t i = entity_id + 1; i < table.entities_max; i += 1) {
-		// if (table.entity_kinds[i] != 0) { return 1; }
 		expect(table.entity_kinds[i] == 0, "Realloc did not properly zero memory");
 	}
 
@@ -1207,6 +1190,7 @@ void BufferTable_destroy(BufferTable *self) {
 	assert(self->entity_table.entities != NULL);
 	assert(self->entity_table.entity_kinds != NULL);
 	#endif
+	uint8_t has_children_to_kill = false;
 	for (size_t i = 0; i < self->entity_table.entities_max; i += 1) {
 		switch (self->entity_table.entity_kinds[i]) {
 			case BUFFER_INVALID: continue;
@@ -1217,8 +1201,21 @@ void BufferTable_destroy(BufferTable *self) {
 				free(strings_buffer);
 				IOBuffer_destroy(&buffer.buffer);
 			}; break;
+			case BUFFER_CHILD: {
+				ChildBuffer buffer = self->entity_table.entities[i].child_buffer;
+				kill(buffer.child_id, SIGTERM);
+				has_children_to_kill = true;
+			}; break;
 		}
 	}
+	// TODO investigate if its necessary to do a hard kill
+	// if (has_children_to_kill) {
+	// 	for (size_t i = 0; i < self->entity_table.entities_max; i += 1) {
+	// 		if (self->entity_table.entity_kinds[i] == BUFFER_CHILD) {
+	// 			wait()
+	// 		}
+	// 	}
+	// }
 	StringTable_destroy(&self->string_table);
 	PollfdTable_destroy(&self->pollfd_table);
 	BufferEntityTable_destroy(&self->entity_table);
@@ -1343,12 +1340,6 @@ uint8_t TEST_BufferTable_insert_ReaderBuffer() {
 			String_of("the previous was empty")
 		};
 
-		// StringsData test_strings_data = (StringsData) {
-		// 	.string_count = array_size(test_strings),
-		// 	.line_count = array_size(test_strings),
-		// 	.top_line = 0
-		// };
-
 		(void)BufferTable_insert_StaticBuffer(&table, test_strings, array_size(test_strings));
 		(void)BufferTable_insert_StaticBuffer(&table, test_strings, array_size(test_strings));
 		(void)BufferTable_insert_StaticBuffer(&table, test_strings, array_size(test_strings));
@@ -1374,6 +1365,117 @@ uint8_t TEST_BufferTable_insert_ReaderBuffer() {
 }
 #endif
 
+size_t BufferTable_insert_ChildBuffer(BufferTable *self, char *command, char  **out_error_string) {
+	char *shell_path = getenv("SHELL");
+	shell_path = (shell_path == NULL) ? "/bin/sh" : shell_path;
+
+	int child_stdout_slave = -1; // parent
+	int child_stdin_slave = -1;
+	int child_stdout = -1; // child
+	int child_stdin = -1;
+	{
+		// NOTE: the child gets the master end of the terminal
+		child_stdout = posix_openpt(O_RDWR | O_NOCTTY);
+		child_stdin = dup(child_stdout);
+		if (child_stdout == -1) {
+			*out_error_string = "failed to obtain an unused terminal";
+			return SIZE_MAX;
+		}
+		int grant_result = grantpt(child_stdout);
+		if (grant_result != 0) {
+			*out_error_string = "failed to claim ownership of opbtained terminal";
+			return SIZE_MAX;
+		}
+		int unlock_result = unlockpt(child_stdout);
+		if (unlock_result != 0) {
+			*out_error_string = "failed to unlock terminal master for opening slaves";
+			return SIZE_MAX;
+		}
+		char *stdout_slave_name = ptsname(child_stdout);
+		if (stdout_slave_name == NULL) {
+			*out_error_string = "failed to get slave name of obtained master terminal";
+			return SIZE_MAX;
+		}
+		child_stdout_slave = open(stdout_slave_name, O_WRONLY);
+		child_stdin_slave = open(stdout_slave_name, O_RDONLY);
+	}
+	assert(child_stdout_slave != -1);
+	assert(child_stdin_slave != -1);
+	assert(child_stdout != -1);
+	assert(child_stdin != -1);
+
+	int child_stderr_slave = -1;
+	int child_stderr = -1;
+	{
+		child_stderr = posix_openpt(O_RDWR | O_NOCTTY);
+		if (child_stderr == -1) {
+			*out_error_string = "Failed to obtain an unused terminal (for stderr)";
+			return SIZE_MAX;
+		}
+		int grant_result = grantpt(child_stderr);
+		if (grant_result != 0) {
+			*out_error_string = "failed to claim ownership of obtained terminal (stderr)";
+			return SIZE_MAX;
+		}
+		int unlock_result = unlockpt(child_stderr);
+		if (unlock_result != 0) {
+			*out_error_string = "failed to unlock terminal master for opening slave (stderr)";
+			return SIZE_MAX;
+		}
+		char *stderr_slave_name = ptsname(child_stderr);
+		if (stderr_slave_name == NULL) {
+			*out_error_string = "failed to get slave name for master terminal (stderr)";
+			return SIZE_MAX;
+		}
+		child_stderr_slave = open(stderr_slave_name, O_WRONLY);
+	}
+	assert(child_stderr != -1);
+	assert(child_stderr_slave != -1);
+
+	int fork_result = fork();
+	if (fork_result < 0) {
+		fprintf(stderr, "Failed to fork -> %s\n", strerror(errno));
+		abort();
+	}
+	if (fork_result == 0) {
+		dup2(child_stdin_slave, STDIN_FILENO);
+		dup2(child_stdout_slave, STDOUT_FILENO);
+		dup2(child_stderr_slave, STDERR_FILENO);
+		close_range(STDERR_FILENO + 1, ~0, 0x0);
+
+		execl(shell_path, shell_path, "-c", command, NULL);
+
+		abort(); // for linting only
+	}else {
+		close(child_stdin_slave);
+		close(child_stdout_slave);
+		close(child_stderr_slave);
+
+		// TODO stdin passthrough
+
+		size_t child_stdout_id = BufferTable_insert_ReaderBuffer(
+			self, (struct pollfd){ .fd = child_stdout, POLLIN }
+		);
+		size_t child_stderr_id = BufferTable_insert_ReaderBuffer(
+			self, (struct pollfd){ .fd = child_stderr, POLLIN }
+		);
+
+		ChildBuffer child_buffer = {
+			.stdout_reader_id = child_stdout_id,
+			.stderr_reader_id = child_stderr_id,
+			.child_id = fork_result
+		};
+
+		size_t child_buffer_id = BufferEntityTable_insert(
+			&self->entity_table,
+			(BufferEntity){ .child_buffer = child_buffer },
+			BUFFER_CHILD
+		);
+
+		return child_buffer_id;
+	}
+}
+
 void BufferTable_display(
 	BufferTable *self, IOBuffer *buffer, size_t entity_id,
 	uint16_t offset_cols, uint16_t offset_rows,
@@ -1389,6 +1491,10 @@ void BufferTable_display(
 		case BUFFER_READER: {
 			strtable_rowid = self->entity_table.entities[entity_id].reader_buffer.strtable_row;
 		}; break;
+		case BUFFER_CHILD: {
+			fprintf(stderr, "Error: invalid state, cannot render child buffer directly\n");
+			abort();
+		}; break;
 		#ifdef DEBUG
 		default: abort();
 		#endif
@@ -1397,12 +1503,23 @@ void BufferTable_display(
 	String *strings = self->string_table.strings_col[strtable_rowid];
 	StringsData strings_data = self->string_table.data_col[strtable_rowid];
 
+	if (strings_data.line_count == 0) {
+		ssize_t format_result = IOBuffer_printf(buffer,
+			MOVE_CURSOR_TO CSI COLOR_RED_FG "m<NO DATA>" CSI STYLE_AND_COLOR_RESET "m",
+			offset_rows + 1,
+			offset_cols + 1
+		);
+		#ifdef DEBUG
+		assert(format_result > 0);
+		#endif
+	}
+
 	size_t i_max = (strings_data.line_count - strings_data.top_line < render_rows)
 		? strings_data.line_count - strings_data.top_line
 		: render_rows
 	;
 
-	//=TODO implement column clipping with escape counting
+	// TODO implement column clipping with escape counting
 	// TODO implement IOBuffer escaped writing
 
 	ssize_t format_result = 0;
@@ -1441,6 +1558,9 @@ uint8_t BufferTable_update(BufferTable *self, size_t current_buffer_id) {
 	for (size_t i = 0; i < self->pollfd_table.fds_max; i += 1) {
 		struct pollfd *poll_fd = &self->pollfd_table.fds[i];
 		if (poll_fd->revents & POLLERR) {
+			char buf;
+			ssize_t read_size = read(poll_fd->fd, &buf, 1);
+			assert(read_size == -1);
 			fprintf(stderr, "WARN: error polling fd -> %s fd = %i\nNOTE: nullifying entry, but not closing fd\n", strerror(errno), poll_fd->fd);
 			poll_fd->fd = -2;
 		}
@@ -1508,6 +1628,10 @@ uint8_t BufferTable_update(BufferTable *self, size_t current_buffer_id) {
 			};
 			case BUFFER_STATIC: {}; break;
 			case BUFFER_READER: {}; break; // work for this will have already been done
+			case BUFFER_CHILD: {
+				fprintf(stderr, "Error: unexpected child buffer as target for update. This is likely invalid\n");
+				abort();
+			}; break;
 			#ifdef DEBUG
 			default: abort();
 			#endif
@@ -1579,6 +1703,10 @@ static inline size_t BufferTable_get_strtable_id(BufferTable *self, size_t buffe
 		case BUFFER_READER: {
 			return self->entity_table.entities[buffer_id].reader_buffer.strtable_row;
 		};
+		case BUFFER_CHILD: {
+			fprintf(stderr, "Error: invalid state, unexpected child buffer as active buffer");
+			abort();
+		};
 	}
 	abort();
 }
@@ -1587,10 +1715,16 @@ static inline size_t BufferTable_get_next_id(
 	BufferTable *self, size_t current_id
 ) {
 	for (size_t i = current_id + 1; i < self->entity_table.entities_max; i += 1) {
-		if (self->entity_table.entity_kinds[i] != BUFFER_INVALID) { return i; }
+		if (
+			self->entity_table.entity_kinds[i] != BUFFER_INVALID &&
+			self->entity_table.entity_kinds[i] != BUFFER_CHILD
+		) { return i; }
 	}
 	for (size_t i = 0; i < current_id; i += 1) {
-		if (self->entity_table.entity_kinds[i] != BUFFER_INVALID) { return i; }
+		if (
+			self->entity_table.entity_kinds[i] != BUFFER_INVALID &&
+			self->entity_table.entity_kinds[i] != BUFFER_CHILD
+		) { return i; }
 	}
 	return current_id;
 }
@@ -1678,10 +1812,16 @@ uint8_t TEST_BufferTable_get_next_id() {
 
 static inline size_t BufferTable_get_prev_id(BufferTable *self, size_t current_id) {
 	for (size_t i = current_id; i > 0; i -= 1) {
-		if (self->entity_table.entity_kinds[i - 1] != BUFFER_INVALID) { return i - 1; }
+		if (
+			self->entity_table.entity_kinds[i - 1] != BUFFER_INVALID &&
+			self->entity_table.entity_kinds[i - 1] != BUFFER_CHILD
+		) { return i - 1; }
 	}
 	for (size_t i = self->entity_table.entities_max - 1; i > current_id; i -= 1) {
-		if (self->entity_table.entity_kinds[i] != BUFFER_INVALID) { return i; }
+		if (
+			self->entity_table.entity_kinds[i] != BUFFER_INVALID &&
+			self->entity_table.entity_kinds[i] != BUFFER_CHILD
+		) { return i; }
 	}
 	return current_id;
 }
@@ -1804,6 +1944,22 @@ void update_window_size(int _signum) {
 	(void)ioctl_result;
 }
 
+String help_strings[] = {
+	String_of("Pager - by Aiden Kring <aidenjkring@gmail.com>"),
+	String_of("______________________________________________"),
+	String_of("Navigation"),
+	String_of("Up          'k' or ↑"),
+	String_of("Down        'j' or ↓"),
+	String_of("Page Up     <PgUp>"),
+	String_of("Page Down   <PgDn>"),
+	String_of("Buffer Next 'l'"),
+	String_of("Buffer Prev 'h'"),
+	String_of("Quit        'q' or <Escape>")
+};
+
+const size_t help_strings_count = sizeof(help_strings) / sizeof(help_strings[0]);
+
+
 int testing_main();
 void print_keycodes();
 int main(int argc, char **argv) {
@@ -1834,6 +1990,25 @@ int main(int argc, char **argv) {
 				memcmp(argv[i], "--help", str_size("--help")) == 0
 			) {
 				BufferTable_insert_StaticBuffer(&buffer_table, help_strings, help_strings_count);
+			}else if (
+				memcmp(argv[i], "-s", str_size("-s")) == 0 ||
+				memcmp(argv[i], "--spawn", str_size("--spawn")) == 0
+			) {
+				i += 1;
+				#ifdef DEBUG
+				assert(i <= (size_t)argc);
+				#endif
+				if (i == (size_t)argv) {
+					fprintf(stderr, "Error: expected \"spawn\" flag to be followed by a command argument\n");
+					return EXIT_FAILURE;
+				}
+				char *error_string = NULL;
+				size_t spawn_result = BufferTable_insert_ChildBuffer(&buffer_table, argv[i], &error_string);
+				if (spawn_result == SIZE_MAX) {
+					assert(error_string != NULL);
+					fprintf(stderr, "Error: failed to spawn subprocess -> %s | %s\n", strerror(errno), error_string);
+					return EXIT_FAILURE;
+				}
 			}else {
 				int file_result = open(argv[i], O_RDONLY);
 				if (file_result == -1) {
@@ -1975,10 +2150,12 @@ int main(int argc, char **argv) {
 					strings_data->top_line += 1;
 					if (strings_data->top_line >= strings_data->line_count) {
 						if (strings_data->line_count == 0) {
-							fprintf(stderr, "Unexpected action on empty buffer");
-							abort();
+							strings_data->top_line = 0;
+							// fprintf(stderr, "Unexpected action on empty buffer\n");
+							// abort();
+						}else {
+							strings_data->top_line = strings_data->line_count - 1;
 						}
-						strings_data->top_line = strings_data->line_count - 1;
 					}
 				}; break;
 				case INPUT_BUFFER_NEXT: {
@@ -2002,10 +2179,12 @@ int main(int argc, char **argv) {
 					strings_data->top_line += render_height;
 					if (strings_data->top_line > strings_data->line_count) {
 						if (strings_data->line_count == 0) {
-							fprintf(stderr, "Unexpected action on empty buffer");
-							abort();
+							strings_data->top_line = 0;
+							// fprintf(stderr, "Unexpected action on empty buffer\n");
+							// abort();
+						}else {
+							strings_data->top_line = strings_data->line_count - 1;
 						}
-						strings_data->top_line = strings_data->line_count - 1;
 					}
 				}; break;
 				case INPUT_QUIT: {

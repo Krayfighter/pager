@@ -1,6 +1,6 @@
 
 run: pager
-	cat Makefile | ./pager src/main.c compile_flags.txt
+	perf record "cat Makefile | ./pager src/main.c compile_flags.txt -s ls"
 
 pager: src/*
 	gcc src/main.c \
@@ -23,4 +23,12 @@ tests: src/*
 		-Itermcodes \
 		-o tests
 		# -fsanitize=address \
+
+release: src/*
+	gcc src/main.c \
+		-Ofast \
+		-std=gnu23 \
+		-Wall -Wextra -Wpedantic \
+		-Itermcodes \
+		-o pager
 
