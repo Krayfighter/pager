@@ -1,6 +1,6 @@
 
 run: pager
-	perf record "cat Makefile | ./pager src/main.c compile_flags.txt -s ls"
+	cat Makefile | ./pager src/main.c compile_flags.txt -s ls
 
 pager: src/*
 	gcc src/main.c \

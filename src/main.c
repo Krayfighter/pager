@@ -600,19 +600,34 @@ uint8_t TEST_IOBuffer_read_from() {
 //
 // returns the number of bytes read, or negative number
 // of bytes read on error
-ssize_t IOBuffer_read_from_realloc(IOBuffer *self, int source) {
+//
+// if `old_address` is not null, then this funciton sets
+// it to the old address if this function reallocates and
+// the buffer location moves
+ssize_t IOBuffer_read_from_realloc(IOBuffer *self, int source, uintptr_t *old_address) {
 	#ifdef DEBUG
 	assert(source > -1);
 	#endif
 
+	uintptr_t original_address = (uintptr_t)self->buffer;
+
 	size_t net_bytes_read = 0;
+
+	// minimum number of available bytes for read
+	#define PADDING_SIZE 64
 
 	DO_READ: {};
 	size_t available_bytes = (self->buffer_size - self->buffer_filled);
-	if (available_bytes == 0) {
+	if (available_bytes < PADDING_SIZE) {
 		self->buffer_size *= 2;
-		self->buffer = realloc(self->buffer, self->buffer_size);
-		assert(self->buffer != NULL);
+		// self->buffer = realloc(self->buffer, self->buffer_size);
+		void *new_buffer = realloc(self->buffer, self->buffer_size);
+		assert(new_buffer != NULL);
+
+		if (old_address != NULL && new_buffer != self->buffer) {
+			*old_address = original_address;
+		}
+		self->buffer = new_buffer;
 		available_bytes = self->buffer_filled;
 	}
 
@@ -621,7 +636,7 @@ ssize_t IOBuffer_read_from_realloc(IOBuffer *self, int source) {
 	if (read_size == -1) { return (net_bytes_read == 0) ? -1 : -(ssize_t)net_bytes_read; }
 	self->buffer_filled += read_size;
 	net_bytes_read += read_size;
-	if (self->buffer_filled == self->buffer_size) { goto DO_READ; }
+	if (self->buffer_size - self->buffer_filled < PADDING_SIZE) { goto DO_READ; }
 
 	return net_bytes_read;
 }
@@ -640,7 +655,7 @@ uint8_t TEST_IOBuffer_read_from_realloc() {
 		expect(write_size != -1, "Failed write");
 		expect((size_t)write_size == test_string.len, "Did not write all bytes");
 
-		ssize_t read_size = IOBuffer_read_from_realloc(&buffer, file_ends[1]);
+		ssize_t read_size = IOBuffer_read_from_realloc(&buffer, file_ends[1], NULL);
 		expect(read_size != -1, "Failed read");
 		expect((size_t)read_size == buffer.buffer_filled, "Read size did not match buffer filled");
 		expect(buffer.buffer_filled == test_string.len, "Buffer filled did not match expected size");
@@ -663,7 +678,7 @@ uint8_t TEST_IOBuffer_read_from_realloc() {
 		expect(write_size != -1, "Failed write");
 		expect((size_t)write_size == test_string.len, "Unexpected write size");
 
-		ssize_t read_size = IOBuffer_read_from_realloc(&buffer, file_ends[1]);
+		ssize_t read_size = IOBuffer_read_from_realloc(&buffer, file_ends[1], NULL);
 		expect(read_size > -1, "Failed read");
 		expect((size_t)read_size == test_string.len, "Unexpected read size");
 		expect(test_string.len == buffer.buffer_filled, "Buffer filled did not match read size");
@@ -1483,6 +1498,7 @@ void BufferTable_display(
 ) {
 
 	size_t strtable_rowid = BufferTable_get_strtable_id(self, entity_id);
+	// size_t strtable_rowid = SIZE_MAX;
 	// switch (self->entity_table.entity_kinds[entity_id]) {
 	// 	case BUFFER_INVALID: abort();
 	// 	case BUFFER_STATIC: {
@@ -1499,6 +1515,7 @@ void BufferTable_display(
 	// 	default: abort();
 	// 	#endif
 	// };
+	assert(strtable_rowid != SIZE_MAX);
 
 	String *strings = self->string_table.strings_col[strtable_rowid];
 	StringsData strings_data = self->string_table.data_col[strtable_rowid];
@@ -1574,7 +1591,19 @@ uint8_t BufferTable_update(BufferTable *self, size_t current_buffer_id) {
 			size_t entity_id = self->pollfd_table.entity_ids[i];
 			if (entity_id != SIZE_MAX) {
 				ReaderBuffer *buffer = &self->entity_table.entities[entity_id].reader_buffer;
-				ssize_t read_size = IOBuffer_read_from_realloc(&buffer->buffer, poll_fd->fd);
+				uintptr_t old_buffer_address = (uintptr_t)NULL;
+				ssize_t read_size = IOBuffer_read_from_realloc(&buffer->buffer, poll_fd->fd, &old_buffer_address);
+				if (old_buffer_address != (uintptr_t)NULL) {
+					intptr_t pointer_diff = (intptr_t)buffer->buffer.buffer - (intptr_t)old_buffer_address;
+					String *strings = self->string_table.strings_col[buffer->strtable_row];
+					StringsData *strings_data = &self->string_table.data_col[buffer->strtable_row];
+
+					for (size_t i = 0; i < strings_data->line_count; i += 1) {
+						// *strings[i] = (String){ .ptr = strings[i]->ptr + pointer_diff, .len = }
+						strings[i] = (String){ .ptr = strings[i].ptr + pointer_diff, .len = strings[i].len };
+					}
+				}
+				uint8_t first_bytes = buffer->buffer.buffer[0];
 				if (read_size == -1) {
 					fprintf(stderr, "Error: failed to perform read on reader buffer -> %s\n", strerror(errno));
 					abort();
@@ -1586,27 +1615,28 @@ uint8_t BufferTable_update(BufferTable *self, size_t current_buffer_id) {
 					continue;
 				}
 
-				String *strings = self->string_table.strings_col[buffer->strtable_row];
-				StringsData strings_data = self->string_table.data_col[buffer->strtable_row];
+				String **strings = &self->string_table.strings_col[buffer->strtable_row];
+				StringsData *strings_data = &self->string_table.data_col[buffer->strtable_row];
 				String next_line = (String) { 0 };
 				while (true) {
 					next_line = get_next_line(buffer->buffer.buffer, &buffer->next_line_start, buffer->buffer.buffer_filled);
 					if (next_line.ptr == NULL) { break; }
 
-					if (strings_data.line_count >= strings_data.string_count) {
-						strings_data.string_count *= 2;
-						strings = realloc(strings, strings_data.string_count * sizeof(String));
+					if (strings_data->line_count >= strings_data->string_count) {
+						strings_data->string_count *= 2;
+						*strings = realloc(*strings, strings_data->string_count * sizeof(String));
 						assert(strings != NULL);
 					}
 
-					strings[strings_data.line_count] = next_line;
-					strings_data.line_count += 1;
+					(*strings)[strings_data->line_count] = next_line;
+					strings_data->line_count += 1;
 				}
 
-				self->string_table.strings_col[buffer->strtable_row] = strings;
-				self->string_table.data_col[buffer->strtable_row] = strings_data;
+				// // TODO add accessors to tables
+				// self->string_table.strings_col[buffer->strtable_row] = strings;
+				// self->string_table.data_col[buffer->strtable_row] = strings_data;
 
-				self->entity_table.entities[i].reader_buffer = *buffer;
+				// self->entity_table.entities[i].reader_buffer = *buffer;
 
 				poll_fd->revents = 0x0;
 
@@ -2030,14 +2060,6 @@ int main(int argc, char **argv) {
 		}
 	}
 
-	size_t buffer_id = BufferTable_get_next_id(&buffer_table, 0);
-	if (buffer_table.entity_table.entity_kinds[buffer_id] == BUFFER_INVALID) {
-		fprintf(stderr, "No data to page over. exiting\n");
-		BufferTable_destroy(&buffer_table);
-		return EXIT_SUCCESS;
-	}
-
-
 	if (!isatty(STDOUT_FILENO)) {
 		char *tty_name = NULL;
 		if (isatty(STDIN_FILENO)) {
@@ -2080,6 +2102,13 @@ int main(int argc, char **argv) {
 		BufferTable_insert_ReaderBuffer(&buffer_table, (struct pollfd){ .fd = old_stdin_pipe, .events = POLLIN });
 	}
 
+	size_t buffer_id = BufferTable_get_next_id(&buffer_table, buffer_table.entity_table.entities_max - 1);
+	if (buffer_table.entity_table.entity_kinds[buffer_id] == BUFFER_INVALID) {
+		fprintf(stderr, "No data to page over. exiting\n");
+		BufferTable_destroy(&buffer_table);
+		return EXIT_SUCCESS;
+	}
+
 	tcgetattr(STDOUT_FILENO, &saved_termconfig);
 	struct termios new_termconfig = saved_termconfig;
 	new_termconfig.c_lflag &= ~(ICANON | ECHO);
@@ -2096,7 +2125,7 @@ int main(int argc, char **argv) {
 	update_window_size(0);
 	signal(SIGWINCH, update_window_size);
 
-	IOBuffer out_buf = IOBuffer_create(40 * 120 * 2);
+	IOBuffer out_buf = IOBuffer_create(40 * 120 * 100);
 
 	size_t stdin_pollfd_id = PollfdTable_insert(
 		&buffer_table.pollfd_table,
